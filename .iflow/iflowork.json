@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "workspace": {
+    "name": "iflow-workspace",
+    "createdAt": 1771863787858,
+    "preset": "starter"
+  },
+  "authorizedRoots": [
+    "/Users/chenweilong/playground/iflow/iflow-workspace"
+  ]
+}

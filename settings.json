@@ -1,0 +1,6 @@
+{
+  "$schema": "https://iflow.ai/config.json",
+  "plugin": [
+    "opencode-scheduler"
+  ]
+}

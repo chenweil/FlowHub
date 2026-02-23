@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>iFlow Workspace</title>
+  </head>
+  <body>
+    <div id="app">
+      <!-- 侧边栏：Agent 列表 -->
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <h1>iFlow Workspace</h1>
+          <button id="add-agent-btn" class="btn-primary">+ 添加 Agent</button>
+        </div>
+        <div class="agent-list" id="agent-list">
+          <!-- Agent 列表将在这里动态生成 -->
+        </div>
+        <div class="sidebar-footer">
+          <div class="connection-status" id="connection-status">
+            <span class="status-dot disconnected"></span>
+            <span>未连接</span>
+          </div>
+          <button id="clear-all-agents" class="btn-text" style="margin-top: 8px; font-size: 12px; color: var(--text-secondary); background: none; border: none; cursor: pointer;">清除所有 Agent</button>
+        </div>
+      </aside>
+
+      <!-- 主内容区 -->
+      <main class="main-content">
+        <!-- 顶部工具栏 -->
+        <header class="toolbar">
+          <div class="current-agent">
+            <h2 id="current-agent-name">选择一个 Agent</h2>
+            <span id="current-agent-status" class="badge">离线</span>
+          </div>
+          <div class="toolbar-actions">
+            <button id="new-session-btn" class="btn-secondary" disabled>新建会话</button>
+            <button id="clear-chat-btn" class="btn-secondary" disabled>清空对话</button>
+          </div>
+        </header>
+
+        <!-- 对话区域 -->
+        <div class="chat-container">
+          <div id="chat-messages" class="chat-messages">
+            <div class="welcome-message">
+              <h3>👋 欢迎使用 iFlow Workspace</h3>
+              <p>从左侧选择一个 Agent 开始对话，或添加新的 Agent。</p>
+            </div>
+          </div>
+
+          <!-- 工具调用面板 -->
+          <div id="tool-calls-panel" class="tool-calls-panel hidden">
+            <div class="tool-calls-header">
+              <h4>🔧 工具调用</h4>
+              <button id="close-tool-panel" class="btn-icon">×</button>
+            </div>
+            <div id="tool-calls-list" class="tool-calls-list">
+              <!-- 工具调用将在这里显示 -->
+            </div>
+          </div>
+        </div>
+
+        <!-- 输入区域 -->
+        <div class="input-container">
+          <div class="input-wrapper">
+            <textarea 
+              id="message-input" 
+              placeholder="输入消息..." 
+              rows="1"
+              disabled
+            ></textarea>
+            <button id="send-btn" class="btn-send" disabled>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="22" y1="2" x2="11" y2="13"></line>
+                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+              </svg>
+            </button>
+          </div>
+          <div class="input-hints">
+            <span>按 Enter 发送，Shift + Enter 换行</span>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <!-- 添加 Agent 弹窗 -->
+    <div id="add-agent-modal" class="modal hidden">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>添加 iFlow Agent</h3>
+          <button id="close-modal" class="btn-icon">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label for="agent-name">Agent 名称</label>
+            <input type="text" id="agent-name" placeholder="我的 iFlow" value="iFlow">
+          </div>
+          <div class="form-group">
+            <label for="iflow-path">iFlow CLI 路径（可选）</label>
+            <input type="text" id="iflow-path" placeholder="iflow（使用系统 PATH）">
+          </div>
+          <div class="form-group">
+            <label for="workspace-path">工作目录</label>
+            <input type="text" id="workspace-path" placeholder="/path/to/workspace" value="/Users/chenweilong/playground">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="cancel-add-agent" class="btn-secondary">取消</button>
+          <button id="confirm-add-agent" class="btn-primary">连接</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

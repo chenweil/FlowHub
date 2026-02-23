@@ -1,0 +1,8 @@
+---
+id: "tmpl_incident_report"
+title: "事故复盘报告"
+description: "系统故障的根因分析"
+createdAt: 1771863787852
+---
+
+帮我撰写事故复盘报告（Postmortem）。请包含：1) 事故时间线（发现、处理、恢复各阶段）；2) 影响范围和损失评估；3) 根本原因分析（5-Why 法）；4) 已采取的临时和永久措施；5) 预防措施和流程改进。生成 incident_report_[日期].md。

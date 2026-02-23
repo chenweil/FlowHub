@@ -1,0 +1,8 @@
+---
+id: "tmpl_api_documentation"
+title: "API 文档生成"
+description: "从代码自动生成 API 文档"
+createdAt: 1771863787852
+---
+
+帮我生成 API 文档。请扫描代码中的接口定义，提取：1) 端点路径和 HTTP 方法；2) 请求参数（路径、查询、请求体）；3) 响应格式和状态码；4) 错误处理；5) 使用示例。生成 API.md 文档，采用标准的 OpenAPI 风格。

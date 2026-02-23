@@ -1,0 +1,19 @@
+# OS
+.DS_Store
+
+# Node / Vite
+node_modules/
+dist/
+.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Rust / Tauri
+src-tauri/target/
+
+# Runtime / Logs
+*.log
+*.pid
+*.pid.lock

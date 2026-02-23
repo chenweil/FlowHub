@@ -1,0 +1,8 @@
+---
+id: "tmpl_business_case"
+title: "商业论证报告"
+description: "投资决策的量化分析"
+createdAt: 1771863787852
+---
+
+帮我撰写商业论证（Business Case）。请分析：1) 投资需求和预算；2) 成本-收益分析（ROI、回收期）；3) 多个方案对比；4) 财务模型和敏感性分析；5) 执行计划和里程碑；6) 决策建议。生成 business_case.md，支持管理层决策。

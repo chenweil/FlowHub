@@ -1,0 +1,8 @@
+---
+id: "tmpl_change_log"
+title: "变更日志管理"
+description: "追踪和记录系统变更"
+createdAt: 1771863787852
+---
+
+帮我维护变更日志（CHANGELOG）。请从 git 历史中：1) 提取每个版本的变更；2) 分类为功能、修复、性能、安全等；3) 使用语义化版本号；4) 添加变更日期和贡献者；5) 标注破坏性变更。生成 CHANGELOG.md，遵循 Keep a Changelog 规范。
