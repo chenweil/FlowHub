@@ -51,14 +51,17 @@ fn stop_reason_to_message(reason: &str) -> &'static str {
 }
 
 pub(crate) async fn emit_task_finish(app_handle: &tauri::AppHandle, agent_id: &str, reason: &str) {
-    let _ = app_handle.emit(
-        "stream-message",
-        json!({
-            "agentId": agent_id,
-            "content": stop_reason_to_message(reason),
-            "type": "system",
-        }),
-    );
+    // end_turn 是最常见的正常结束，不再向聊天区追加冗余“任务完成”文案。
+    if reason != "end_turn" {
+        let _ = app_handle.emit(
+            "stream-message",
+            json!({
+                "agentId": agent_id,
+                "content": stop_reason_to_message(reason),
+                "type": "system",
+            }),
+        );
+    }
 
     let _ = app_handle.emit(
         "task-finish",

@@ -17,12 +17,18 @@
         <div class="agent-list" id="agent-list">
           <!-- Agent 列表将在这里动态生成 -->
         </div>
+        <div class="session-section">
+          <div class="session-section-title">会话历史</div>
+          <div class="session-list" id="session-list">
+            <div class="session-empty">选择 Agent 后显示会话历史</div>
+          </div>
+        </div>
         <div class="sidebar-footer">
           <div class="connection-status" id="connection-status">
             <span class="status-dot disconnected"></span>
             <span>未连接</span>
           </div>
-          <button id="clear-all-agents" class="btn-text" style="margin-top: 8px; font-size: 12px; color: var(--text-secondary); background: none; border: none; cursor: pointer;">清除所有 Agent</button>
+          <button id="clear-all-agents" class="btn-text">清除所有 Agent</button>
         </div>
       </aside>
 
@@ -36,7 +42,7 @@
           </div>
           <div class="toolbar-actions">
             <button id="new-session-btn" class="btn-secondary" disabled>新建会话</button>
-            <button id="clear-chat-btn" class="btn-secondary" disabled>清空对话</button>
+            <button id="clear-chat-btn" class="btn-secondary" disabled>清空当前会话</button>
           </div>
         </header>
 
@@ -78,7 +84,7 @@
             </button>
           </div>
           <div class="input-hints">
-            <span>按 Enter 发送，Shift + Enter 换行</span>
+            <span id="input-status-hint">按 Enter 发送，Shift + Enter 换行</span>
           </div>
         </div>
       </main>
