@@ -17,3 +17,7 @@ src-tauri/target/
 *.log
 *.pid
 *.pid.lock
+
+# OpenCode local workspace
+.opencode/
+opencode.jsonc
