@@ -252,6 +252,138 @@ fn build_prompt_params(session_id: &str, prompt: &str) -> Value {
     })
 }
 
+fn text_from_json_value(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => {
+            let normalized = text.trim();
+            if normalized.is_empty() {
+                None
+            } else {
+                Some(normalized.to_string())
+            }
+        }
+        Value::Array(items) => {
+            let parts: Vec<String> = items.iter().filter_map(text_from_json_value).collect();
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join(" "))
+            }
+        }
+        Value::Object(map) => map.get("text").and_then(text_from_json_value),
+        _ => None,
+    }
+}
+
+fn extract_registry_array<'a>(payload: &'a Value, key: &str) -> Option<&'a Vec<Value>> {
+    payload.get(key).and_then(Value::as_array).or_else(|| {
+        payload
+            .get("_meta")
+            .and_then(|meta| meta.get(key))
+            .and_then(Value::as_array)
+    })
+}
+
+fn normalized_command_entries(payload: &Value) -> Vec<Value> {
+    let Some(raw_entries) = extract_registry_array(payload, "availableCommands") else {
+        return Vec::new();
+    };
+
+    raw_entries
+        .iter()
+        .filter_map(|entry| {
+            let raw_name = entry.get("name").and_then(Value::as_str)?.trim();
+            if raw_name.is_empty() {
+                return None;
+            }
+
+            let normalized_name = if raw_name.starts_with('/') {
+                raw_name.to_string()
+            } else {
+                format!("/{}", raw_name)
+            };
+
+            let description = entry
+                .get("description")
+                .and_then(text_from_json_value)
+                .unwrap_or_default();
+            let scope = entry
+                .get("_meta")
+                .and_then(|meta| meta.get("scope"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+
+            Some(json!({
+                "name": normalized_name,
+                "description": description,
+                "scope": scope,
+            }))
+        })
+        .collect()
+}
+
+fn normalized_mcp_entries(payload: &Value) -> Vec<Value> {
+    let Some(raw_entries) = extract_registry_array(payload, "availableMcpServers") else {
+        return Vec::new();
+    };
+
+    raw_entries
+        .iter()
+        .filter_map(|entry| {
+            let raw_name = entry
+                .get("name")
+                .or_else(|| entry.get("id"))
+                .and_then(Value::as_str)?
+                .trim();
+            if raw_name.is_empty() {
+                return None;
+            }
+
+            let description = entry
+                .get("description")
+                .and_then(text_from_json_value)
+                .unwrap_or_default();
+
+            Some(json!({
+                "name": raw_name,
+                "description": description,
+            }))
+        })
+        .collect()
+}
+
+fn emit_command_registry_payload(app_handle: &tauri::AppHandle, agent_id: &str, payload: &Value) {
+    let commands = normalized_command_entries(payload);
+    let mcp_servers = normalized_mcp_entries(payload);
+
+    if commands.is_empty() && mcp_servers.is_empty() {
+        return;
+    }
+
+    let _ = app_handle.emit(
+        "command-registry",
+        json!({
+            "agentId": agent_id,
+            "commands": commands,
+            "mcpServers": mcp_servers,
+        }),
+    );
+}
+
+fn emit_command_registry_from_update(
+    app_handle: &tauri::AppHandle,
+    agent_id: &str,
+    update: &Value,
+) {
+    emit_command_registry_payload(app_handle, agent_id, update);
+
+    if let Some(content) = update.get("content") {
+        emit_command_registry_payload(app_handle, agent_id, content);
+    }
+}
+
 // 查找可用端口
 pub async fn find_available_port() -> Result<u16, String> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -357,16 +489,6 @@ pub async fn message_listener_task(
 
                                         if raw.starts_with("//") {
                                             println!("[listener] Control message: {}", raw);
-                                            if raw.contains("ready") {
-                                                let _ = app_handle.emit(
-                                                    "stream-message",
-                                                    json!({
-                                                        "agentId": &agent_id,
-                                                        "content": "✅ iFlow 连接已建立，正在初始化会话...",
-                                                        "type": "system",
-                                                    }),
-                                                );
-                                            }
                                             continue;
                                         }
 
@@ -382,6 +504,7 @@ pub async fn message_listener_task(
                                             if method == "session/update" {
                                                 if let Some(update) = params.and_then(|p| p.get("update")) {
                                                     handle_session_update(&app_handle, &agent_id, update).await;
+                                                    emit_command_registry_from_update(&app_handle, &agent_id, update);
                                                 }
                                                 continue;
                                             }
@@ -466,6 +589,10 @@ pub async fn message_listener_task(
                                                 continue;
                                             }
 
+                                            if let Some(result) = message_json.get("result") {
+                                                emit_command_registry_payload(&app_handle, &agent_id, result);
+                                            }
+
                                             let _ = app_handle.emit(
                                                 "stream-message",
                                                 json!({
@@ -527,14 +654,9 @@ pub async fn message_listener_task(
                                                 break;
                                             }
 
-                                            let _ = app_handle.emit(
-                                                "stream-message",
-                                                json!({
-                                                    "agentId": &agent_id,
-                                                    "content": "✅ iFlow ACP 会话已就绪",
-                                                    "type": "system",
-                                                }),
-                                            );
+                                            if let Some(result) = message_json.get("result") {
+                                                emit_command_registry_payload(&app_handle, &agent_id, result);
+                                            }
 
                                             if let Some(current_session_id) = &session_id {
                                                 while let Some(prompt) = queued_prompts.pop_front() {
@@ -610,4 +732,72 @@ pub async fn message_listener_task(
     }
 
     println!("[listener] Stopped for agent: {}", agent_id);
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{normalized_command_entries, normalized_mcp_entries, text_from_json_value};
+
+    #[test]
+    fn parse_text_from_json_value_array() {
+        let input = json!(["line1", "line2"]);
+        assert_eq!(text_from_json_value(&input).as_deref(), Some("line1 line2"));
+    }
+
+    #[test]
+    fn parse_available_commands_from_meta() {
+        let payload = json!({
+            "_meta": {
+                "availableCommands": [
+                    {
+                        "name": "help",
+                        "description": ["show", "help"],
+                        "_meta": { "scope": "project" }
+                    }
+                ]
+            }
+        });
+
+        let entries = normalized_command_entries(&payload);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].get("name").and_then(|v| v.as_str()),
+            Some("/help")
+        );
+        assert_eq!(
+            entries[0].get("description").and_then(|v| v.as_str()),
+            Some("show help")
+        );
+        assert_eq!(
+            entries[0].get("scope").and_then(|v| v.as_str()),
+            Some("project")
+        );
+    }
+
+    #[test]
+    fn parse_available_mcp_servers_from_meta() {
+        let payload = json!({
+            "_meta": {
+                "availableMcpServers": [
+                    {
+                        "name": "filesystem",
+                        "description": "Local FS"
+                    }
+                ]
+            }
+        });
+
+        let entries = normalized_mcp_entries(&payload);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].get("name").and_then(|v| v.as_str()),
+            Some("filesystem")
+        );
+        assert_eq!(
+            entries[0].get("description").and_then(|v| v.as_str()),
+            Some("Local FS")
+        );
+    }
 }

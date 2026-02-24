@@ -322,6 +322,43 @@ index.html               # 主页面
 3. **下周**: 多 Agent 支持（扩展性）
 4. **后续**: 工具调用可视化、文件浏览器、Git 集成等
 
+### 基于 CodexMonitor 的渐进接入方案（2026-02-24）
+
+#### 决策结论
+
+| 项目 | 结论 | 说明 |
+| --- | --- | --- |
+| 许可证 | 可复用 | CodexMonitor 为 MIT，可在保留版权与许可证声明前提下复用 |
+| 是否直接 Fork 全量改造 | 不建议 | CodexMonitor 深度绑定 `codex app-server`，直接改成 iFlow 成本高、风险高 |
+| 推荐策略 | 模块借鉴 + 渐进迁移 | 保持当前 iFlow MVP 主链路，按模块吸收成熟工程实践 |
+
+#### 可复用模块清单（CodexMonitor -> iFlow）
+
+| 优先级 | 可借鉴模块 | 现状落点 | 具体动作 |
+| --- | --- | --- | --- |
+| P0 | 后端「核心逻辑 + 适配层」分层 | `src-tauri/src/agents/iflow_adapter.rs` 目前体量较大 | 先按职责拆分连接、协议、会话、事件模块，保持行为不变 |
+| P0 | 前端 IPC 统一封装 | `src/main.ts` 直接调用 `invoke/listen` | 抽离 `src/services/tauri.ts` 与 `src/services/events.ts` |
+| P0 | 会话/线程状态集中管理 | 状态分散在 `src/main.ts` 多个 map | 引入轻量状态模块，主入口只保留编排 |
+| P1 | Workspace 生命周期模型 | Agent 与 workspace 当前耦合较紧 | 增加 workspace 实体层，为多工作区并发做准备 |
+| P2 | Git/GitHub 面板能力 | 当前未重点建设 | iFlow 主链路稳定后再评估引入 |
+| P2 | 远程 daemon / iOS | 当前本地优先 | MVP 阶段暂缓，避免过早复杂化 |
+
+#### 两周落地路线图
+
+| 周次 | 目标 | 交付物 | 验收标准 |
+| --- | --- | --- | --- |
+| 第 1 周 | 稳定内核，降低耦合 | 1) ACP 后端拆分<br>2) 前端 IPC/事件层抽离<br>3) 会话状态集中 | 不回退：连接、发送、流式、tool-call、task-finish 均可用 |
+| 第 2 周 | 补齐工程化能力 | 1) workspace 抽象<br>2) 错误恢复与重连强化<br>3) 测试补全 | `cargo check` 与 `cargo test` 通过，核心手工回归通过 |
+
+#### 立即执行（P0）
+
+| 顺序 | 任务 | 文件 |
+| --- | --- | --- |
+| 1 | 拆分 `iflow_adapter`（等价重构，零行为变化） | `src-tauri/src/agents/iflow_adapter.rs` |
+| 2 | 增加前端服务层，主入口去业务细节 | `src/main.ts` |
+| 3 | 迁移 Tauri 调用到服务层 | `src/services/tauri.ts`（新增） |
+| 4 | 集中事件分发与订阅 | `src/services/events.ts`（新增） |
+
 ---
 
 ## 参考资源

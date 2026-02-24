@@ -1,4 +1,5 @@
 use tokio::process::Child;
+use tokio::sync::Mutex;
 
 use crate::manager::AgentManager;
 use crate::models::{AgentInfo, MessageSender};
@@ -15,12 +16,14 @@ pub struct AgentInstance {
 // 应用状态
 pub struct AppState {
     pub agent_manager: AgentManager,
+    pub storage_lock: Mutex<()>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
         Self {
             agent_manager: AgentManager::default(),
+            storage_lock: Mutex::new(()),
         }
     }
 }

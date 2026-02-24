@@ -23,6 +23,7 @@ const clearChatBtnEl = document.getElementById('clear-chat-btn') as HTMLButtonEl
 const connectionStatusEl = document.getElementById('connection-status') as HTMLDivElement;
 const clearAllAgentsBtnEl = document.getElementById('clear-all-agents') as HTMLButtonElement;
 const inputStatusHintEl = document.getElementById('input-status-hint') as HTMLSpanElement;
+const slashCommandMenuEl = document.getElementById('slash-command-menu') as HTMLDivElement;
 
 // 类型定义
 interface Agent {
@@ -59,6 +60,32 @@ interface ToolCall {
   output?: string;
 }
 
+interface RegistryCommand {
+  name: string;
+  description: string;
+  scope: string;
+}
+
+interface RegistryMcpServer {
+  name: string;
+  description: string;
+}
+
+interface AgentRegistry {
+  commands: RegistryCommand[];
+  mcpServers: RegistryMcpServer[];
+}
+
+interface SlashMenuItem {
+  id: string;
+  label: string;
+  insertText: string;
+  description: string;
+  hint: string;
+  category: 'command' | 'mcp' | 'builtin';
+  searchable: string;
+}
+
 interface StoredSession {
   id: string;
   agentId: string;
@@ -79,6 +106,11 @@ type StoredSessionMap = Record<string, StoredSession[]>;
 type StoredMessageMap = Record<string, StoredMessage[]>;
 type LegacyMessageHistoryMap = Record<string, StoredMessage[]>;
 
+interface StorageSnapshot {
+  sessionsByAgent: StoredSessionMap;
+  messagesBySession: StoredMessageMap;
+}
+
 // 状态
 let agents: Agent[] = [];
 let currentAgentId: string | null = null;
@@ -88,6 +120,10 @@ let messages: Message[] = [];
 let sessionsByAgent: Record<string, Session[]> = {};
 let messagesBySession: Record<string, Message[]> = {};
 let inflightSessionByAgent: Record<string, string> = {};
+let registryByAgent: Record<string, AgentRegistry> = {};
+let slashMenuItems: SlashMenuItem[] = [];
+let slashMenuVisible = false;
+let slashMenuActiveIndex = 0;
 
 type ComposerState = 'ready' | 'busy' | 'disabled';
 type StreamMessageType = 'content' | 'thought' | 'system' | 'plan';
@@ -96,6 +132,27 @@ const AGENTS_STORAGE_KEY = 'iflow-agents';
 const SESSIONS_STORAGE_KEY = 'iflow-sessions';
 const SESSION_MESSAGES_STORAGE_KEY = 'iflow-session-messages';
 const LEGACY_MESSAGE_HISTORY_STORAGE_KEY = 'iflow-message-history';
+const DEFAULT_SLASH_COMMANDS: ReadonlyArray<{ command: string; description: string }> = [
+  { command: '/help', description: '显示帮助与命令说明' },
+  { command: '/commands', description: '列出可用命令' },
+  { command: '/tools', description: '查看工具列表' },
+  { command: '/memory show', description: '查看当前记忆' },
+  { command: '/stats', description: '查看会话统计' },
+  { command: '/mcp list', description: '查看 MCP 列表' },
+  { command: '/agents list', description: '查看可用 Agent' },
+];
+const TITLE_GENERIC_PHRASES = new Set<string>([
+  '继续',
+  '好的',
+  '谢谢',
+  '请继续',
+  '帮我',
+  '请帮我',
+  '开始',
+  'ok',
+  'okay',
+  'thanks',
+]);
 
 // 初始化
 async function init() {
@@ -116,12 +173,14 @@ function setComposerState(state: ComposerState, hint: string) {
     messageInputEl.disabled = false;
     sendBtnEl.disabled = false;
     messageInputEl.placeholder = '输入消息...';
+    updateSlashCommandMenu();
     return;
   }
 
   messageInputEl.disabled = true;
   sendBtnEl.disabled = true;
   messageInputEl.placeholder = state === 'busy' ? '正在回复中，请等待...' : '请选择 Agent 后开始对话...';
+  hideSlashCommandMenu();
 }
 
 function refreshComposerState() {
@@ -185,6 +244,19 @@ function setupTauriEventListeners() {
     if (payload.agentId === currentAgentId && Array.isArray(payload.toolCalls)) {
       showToolCalls(payload.toolCalls);
     }
+  });
+
+  listen('command-registry', (event) => {
+    const payload = event.payload as {
+      agentId?: string;
+      commands?: unknown[];
+      mcpServers?: unknown[];
+    };
+    if (!payload.agentId) {
+      return;
+    }
+
+    applyAgentRegistry(payload.agentId, payload.commands, payload.mcpServers);
   });
 
   listen('task-finish', (event) => {
@@ -268,7 +340,7 @@ function appendStreamMessage(
   lastMessage.content += normalizedContent;
   lastMessage.timestamp = new Date();
   messagesBySession[sessionId] = sessionMessages;
-  touchSessionById(sessionId);
+  touchSessionById(sessionId, sessionMessages);
   void saveSessionMessages();
 
   if (sessionId === currentSessionId) {
@@ -278,6 +350,303 @@ function appendStreamMessage(
   } else {
     renderSessionList();
   }
+}
+
+function applyAgentRegistry(agentId: string, rawCommands: unknown[] | undefined, rawMcpServers: unknown[] | undefined) {
+  const commands = normalizeRegistryCommands(rawCommands);
+  const mcpServers = normalizeRegistryMcpServers(rawMcpServers);
+  if (commands.length === 0 && mcpServers.length === 0) {
+    return;
+  }
+
+  registryByAgent[agentId] = {
+    commands,
+    mcpServers,
+  };
+
+  if (agentId === currentAgentId) {
+    updateSlashCommandMenu();
+  }
+}
+
+function normalizeRegistryCommands(rawEntries: unknown[] | undefined): RegistryCommand[] {
+  if (!Array.isArray(rawEntries)) {
+    return [];
+  }
+
+  const normalized: RegistryCommand[] = [];
+  const seen = new Set<string>();
+
+  for (const entry of rawEntries) {
+    if (!entry || typeof entry !== 'object') {
+      continue;
+    }
+
+    const rawName = readTextFromUnknown((entry as Record<string, unknown>).name);
+    if (!rawName) {
+      continue;
+    }
+
+    const name = rawName.startsWith('/') ? rawName : `/${rawName}`;
+    const dedupeKey = name.toLowerCase();
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+
+    const description = readTextFromUnknown((entry as Record<string, unknown>).description);
+    const scope = readTextFromUnknown((entry as Record<string, unknown>).scope);
+    normalized.push({ name, description, scope });
+    seen.add(dedupeKey);
+  }
+
+  return normalized;
+}
+
+function normalizeRegistryMcpServers(rawEntries: unknown[] | undefined): RegistryMcpServer[] {
+  if (!Array.isArray(rawEntries)) {
+    return [];
+  }
+
+  const normalized: RegistryMcpServer[] = [];
+  const seen = new Set<string>();
+
+  for (const entry of rawEntries) {
+    if (!entry || typeof entry !== 'object') {
+      continue;
+    }
+
+    const rawName = readTextFromUnknown((entry as Record<string, unknown>).name);
+    if (!rawName) {
+      continue;
+    }
+
+    const dedupeKey = rawName.toLowerCase();
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+
+    const description = readTextFromUnknown((entry as Record<string, unknown>).description);
+    normalized.push({ name: rawName, description });
+    seen.add(dedupeKey);
+  }
+
+  return normalized;
+}
+
+function readTextFromUnknown(value: unknown): string {
+  if (typeof value === 'string') {
+    return value.trim();
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => readTextFromUnknown(item))
+      .filter((item) => Boolean(item))
+      .join(' ')
+      .trim();
+  }
+
+  if (value && typeof value === 'object') {
+    return readTextFromUnknown((value as Record<string, unknown>).text);
+  }
+
+  return '';
+}
+
+function getSlashQueryFromInput(): string | null {
+  const firstLine = messageInputEl.value.split('\n')[0].replace(/^\s+/, '');
+  if (!firstLine.startsWith('/')) {
+    return null;
+  }
+
+  if (/\s/.test(firstLine)) {
+    return null;
+  }
+
+  const token = firstLine.slice(1);
+  if (token.includes('/')) {
+    return null;
+  }
+
+  return token.toLowerCase();
+}
+
+function buildSlashMenuItemsForCurrentAgent(): SlashMenuItem[] {
+  const items: SlashMenuItem[] = [];
+  const seen = new Set<string>();
+  const currentRegistry = currentAgentId ? registryByAgent[currentAgentId] : undefined;
+
+  const pushUnique = (item: SlashMenuItem) => {
+    const dedupeKey = item.insertText.toLowerCase();
+    if (seen.has(dedupeKey)) {
+      return;
+    }
+    seen.add(dedupeKey);
+    items.push(item);
+  };
+
+  currentRegistry?.commands.forEach((entry, index) => {
+    const hint = entry.scope || 'command';
+    pushUnique({
+      id: `command-${index}-${entry.name}`,
+      label: entry.name,
+      insertText: entry.name,
+      description: entry.description || '已安装命令',
+      hint,
+      category: 'command',
+      searchable: `${entry.name} ${entry.description} ${hint}`.toLowerCase(),
+    });
+  });
+
+  currentRegistry?.mcpServers.forEach((entry, index) => {
+    const commandText = `/mcp get ${entry.name}`;
+    const description = entry.description || `查看 MCP 服务 ${entry.name}`;
+    pushUnique({
+      id: `mcp-${index}-${entry.name}`,
+      label: commandText,
+      insertText: commandText,
+      description,
+      hint: 'mcp',
+      category: 'mcp',
+      searchable: `${commandText} ${entry.name} ${description}`.toLowerCase(),
+    });
+  });
+
+  DEFAULT_SLASH_COMMANDS.forEach((entry, index) => {
+    pushUnique({
+      id: `builtin-${index}-${entry.command}`,
+      label: entry.command,
+      insertText: entry.command,
+      description: entry.description,
+      hint: 'builtin',
+      category: 'builtin',
+      searchable: `${entry.command} ${entry.description}`.toLowerCase(),
+    });
+  });
+
+  return items;
+}
+
+function updateSlashCommandMenu() {
+  const query = getSlashQueryFromInput();
+  if (query === null || messageInputEl.disabled || !currentAgentId) {
+    hideSlashCommandMenu();
+    return;
+  }
+
+  const candidateItems = buildSlashMenuItemsForCurrentAgent();
+  const filteredItems =
+    query.length === 0
+      ? candidateItems
+      : candidateItems.filter((item) => item.searchable.includes(query));
+
+  slashMenuItems = filteredItems.slice(0, 12);
+  if (slashMenuItems.length === 0) {
+    slashMenuVisible = true;
+    slashMenuActiveIndex = 0;
+    slashCommandMenuEl.classList.remove('hidden');
+    slashCommandMenuEl.innerHTML = `<div class="slash-command-empty">未找到匹配命令：/${escapeHtml(query)}</div>`;
+    return;
+  }
+
+  if (!slashMenuVisible) {
+    slashMenuActiveIndex = 0;
+  } else if (slashMenuActiveIndex >= slashMenuItems.length) {
+    slashMenuActiveIndex = slashMenuItems.length - 1;
+  }
+
+  slashMenuVisible = true;
+  slashCommandMenuEl.classList.remove('hidden');
+  slashCommandMenuEl.innerHTML = slashMenuItems
+    .map((item, index) => {
+      const activeClass = index === slashMenuActiveIndex ? 'active' : '';
+      const desc = escapeHtml(item.description || (item.category === 'mcp' ? 'MCP 服务' : '命令'));
+      return `
+      <button type="button" class="slash-command-item ${activeClass}" data-index="${index}">
+        <div class="slash-command-main">
+          <div class="slash-command-name">${escapeHtml(item.label)}</div>
+          <div class="slash-command-desc">${desc}</div>
+        </div>
+        <span class="slash-command-hint">${escapeHtml(item.hint)}</span>
+      </button>
+    `;
+    })
+    .join('');
+}
+
+function hideSlashCommandMenu() {
+  slashMenuVisible = false;
+  slashMenuItems = [];
+  slashMenuActiveIndex = 0;
+  slashCommandMenuEl.classList.add('hidden');
+  slashCommandMenuEl.innerHTML = '';
+}
+
+function moveSlashMenuSelection(offset: number) {
+  if (slashMenuItems.length === 0) {
+    return;
+  }
+  const total = slashMenuItems.length;
+  slashMenuActiveIndex = (slashMenuActiveIndex + offset + total) % total;
+  updateSlashCommandMenu();
+}
+
+function applySlashMenuItem(index: number): boolean {
+  const item = slashMenuItems[index];
+  if (!item) {
+    return false;
+  }
+
+  messageInputEl.value = `${item.insertText} `;
+  messageInputEl.style.height = 'auto';
+  messageInputEl.style.height = `${messageInputEl.scrollHeight}px`;
+  hideSlashCommandMenu();
+  messageInputEl.focus();
+  return true;
+}
+
+function handleSlashMenuKeydown(event: KeyboardEvent): boolean {
+  if (!slashMenuVisible) {
+    return false;
+  }
+
+  if (event.key === 'ArrowDown') {
+    event.preventDefault();
+    moveSlashMenuSelection(1);
+    return true;
+  }
+
+  if (event.key === 'ArrowUp') {
+    event.preventDefault();
+    moveSlashMenuSelection(-1);
+    return true;
+  }
+
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    hideSlashCommandMenu();
+    return true;
+  }
+
+  if (event.key === 'Tab') {
+    event.preventDefault();
+    if (slashMenuItems.length === 0) {
+      hideSlashCommandMenu();
+      return true;
+    }
+    return applySlashMenuItem(slashMenuActiveIndex);
+  }
+
+  if (event.key === 'Enter' && !event.shiftKey) {
+    if (slashMenuItems.length === 0) {
+      hideSlashCommandMenu();
+      return false;
+    }
+    event.preventDefault();
+    return applySlashMenuItem(slashMenuActiveIndex);
+  }
+
+  return false;
 }
 
 // 设置事件监听
@@ -308,6 +677,10 @@ function setupEventListeners() {
   });
 
   messageInputEl.addEventListener('keydown', (e) => {
+    if (handleSlashMenuKeydown(e)) {
+      return;
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       void sendMessage();
@@ -317,6 +690,29 @@ function setupEventListeners() {
   messageInputEl.addEventListener('input', () => {
     messageInputEl.style.height = 'auto';
     messageInputEl.style.height = `${messageInputEl.scrollHeight}px`;
+    updateSlashCommandMenu();
+  });
+
+  messageInputEl.addEventListener('blur', () => {
+    window.setTimeout(() => {
+      hideSlashCommandMenu();
+    }, 120);
+  });
+
+  slashCommandMenuEl.addEventListener('mousedown', (event) => {
+    const target = event.target as HTMLElement;
+    const itemEl = target.closest('.slash-command-item[data-index]') as HTMLElement | null;
+    if (!itemEl || !itemEl.dataset.index) {
+      return;
+    }
+
+    event.preventDefault();
+    const index = Number(itemEl.dataset.index);
+    if (Number.isNaN(index)) {
+      return;
+    }
+
+    applySlashMenuItem(index);
   });
 
   sendBtnEl.addEventListener('click', () => {
@@ -412,6 +808,8 @@ async function clearAllAgents() {
   sessionsByAgent = {};
   messagesBySession = {};
   inflightSessionByAgent = {};
+  registryByAgent = {};
+  hideSlashCommandMenu();
 
   await saveAgents();
   await saveSessions();
@@ -521,6 +919,7 @@ async function deleteAgent(agentId: string) {
 
   agents = agents.filter((a) => a.id !== agentId);
   delete inflightSessionByAgent[agentId];
+  delete registryByAgent[agentId];
 
   const removedSessions = sessionsByAgent[agentId] || [];
   delete sessionsByAgent[agentId];
@@ -742,12 +1141,13 @@ async function sendMessage() {
     timestamp: new Date(),
   };
   messages.push(userMessage);
-  touchCurrentSession(content);
+  touchCurrentSession();
   renderMessages();
   scrollToBottom();
 
   messageInputEl.value = '';
   messageInputEl.style.height = 'auto';
+  hideSlashCommandMenu();
   inflightSessionByAgent[requestAgentId] = requestSessionId;
   refreshComposerState();
 
@@ -959,7 +1359,7 @@ function getMessagesForSession(sessionId: string): Message[] {
   }));
 }
 
-function touchCurrentSession(firstUserContent?: string) {
+function touchCurrentSession() {
   if (!currentAgentId || !currentSessionId) {
     return;
   }
@@ -967,34 +1367,207 @@ function touchCurrentSession(firstUserContent?: string) {
   if (!session) {
     return;
   }
-
-  if (firstUserContent && (session.title === '默认会话' || session.title.startsWith('会话 '))) {
-    session.title = makeSessionTitle(firstUserContent);
-  }
   session.updatedAt = new Date();
 
   void saveSessions();
   renderSessionList();
 }
 
-function touchSessionById(sessionId: string) {
+function touchSessionById(sessionId: string, sessionMessages?: Message[]) {
   for (const sessionList of Object.values(sessionsByAgent)) {
     const session = sessionList.find((item) => item.id === sessionId);
     if (!session) {
       continue;
     }
+    maybeGenerateSessionTitle(session, sessionMessages ?? getMessagesForSession(sessionId));
     session.updatedAt = new Date();
     void saveSessions();
     return;
   }
 }
 
+function maybeGenerateSessionTitle(session: Session, sessionMessages: Message[]) {
+  const dialoguePair = getLatestDialoguePair(sessionMessages);
+  if (!dialoguePair) {
+    return;
+  }
+
+  const nextTitle = makeSessionTitleFromDialogue(
+    dialoguePair.userMessage.content,
+    dialoguePair.assistantMessage.content
+  );
+  if (nextTitle === session.title) {
+    return;
+  }
+  session.title = nextTitle;
+}
+
+function makeSessionTitleFromDialogue(userContent: string, assistantContent: string): string {
+  const normalizedUser = normalizeTitleSource(userContent);
+  const normalizedAssistant = normalizeTitleSource(assistantContent);
+
+  const userPhrases = extractTitlePhrases(normalizedUser);
+  const assistantPhrases = extractTitlePhrases(normalizedAssistant);
+  const keywordTitle = composeKeywordTitle(userPhrases, assistantPhrases);
+
+  if (keywordTitle) {
+    return makeSessionTitle(keywordTitle);
+  }
+
+  const fallbackTitle = userPhrases[0] || assistantPhrases[0] || normalizedUser || normalizedAssistant || '新会话';
+  return makeSessionTitle(fallbackTitle);
+}
+
+function getLatestDialoguePair(
+  sessionMessages: Message[]
+): { userMessage: Message; assistantMessage: Message } | null {
+  let latestUserIndex = -1;
+  for (let i = sessionMessages.length - 1; i >= 0; i -= 1) {
+    const message = sessionMessages[i];
+    if (message.role === 'user' && Boolean(message.content.trim())) {
+      latestUserIndex = i;
+      break;
+    }
+  }
+
+  if (latestUserIndex < 0) {
+    return null;
+  }
+
+  let latestAssistantMessage: Message | null = null;
+  for (let i = sessionMessages.length - 1; i > latestUserIndex; i -= 1) {
+    const message = sessionMessages[i];
+    if (message.role === 'assistant' && Boolean(message.content.trim())) {
+      latestAssistantMessage = message;
+      break;
+    }
+  }
+
+  if (!latestAssistantMessage) {
+    return null;
+  }
+
+  return {
+    userMessage: sessionMessages[latestUserIndex],
+    assistantMessage: latestAssistantMessage,
+  };
+}
+
+function composeKeywordTitle(userPhrases: string[], assistantPhrases: string[]): string {
+  const keywords: string[] = [];
+
+  for (const phrase of userPhrases) {
+    appendTitleKeyword(keywords, phrase);
+    if (keywords.length >= 2) {
+      return keywords.join(' · ');
+    }
+  }
+
+  for (const phrase of assistantPhrases) {
+    appendTitleKeyword(keywords, phrase);
+    if (keywords.length >= 2) {
+      return keywords.join(' · ');
+    }
+  }
+
+  return keywords.join(' · ');
+}
+
+function appendTitleKeyword(target: string[], phrase: string) {
+  const keyword = toTitleKeyword(phrase);
+  if (!keyword || target.includes(keyword)) {
+    return;
+  }
+  target.push(keyword);
+}
+
+function toTitleKeyword(phrase: string): string {
+  const cleaned = normalizeTitleSource(
+    phrase
+      .replace(
+        /^(请问|请|帮我|麻烦|我想|我需要|我希望|我打算|可以|能否|请你|帮忙|让我|想要|我要|现在|先|再|继续)\s*/g,
+        ''
+      )
+      .replace(/^(please|could you|can you|help me|i want to|i need to)\s+/i, '')
+      .replace(/\b(please|help|could|would|can|you|me|i|to|the|a|an)\b/gi, ' ')
+      .replace(/(一下|一下子|一下吧|一下哈|一下呢)$/g, '')
+  );
+
+  if (!cleaned) {
+    return '';
+  }
+
+  const lowercase = cleaned.toLowerCase();
+  if (TITLE_GENERIC_PHRASES.has(cleaned) || TITLE_GENERIC_PHRASES.has(lowercase)) {
+    return '';
+  }
+
+  if (!isInformativeTitlePhrase(cleaned)) {
+    return '';
+  }
+
+  return cleaned;
+}
+
+function isInformativeTitlePhrase(phrase: string): boolean {
+  const chineseChars = phrase.match(/[\u4e00-\u9fff]/g) || [];
+  if (chineseChars.length >= 2) {
+    return true;
+  }
+
+  const englishWords = phrase.match(/[a-zA-Z0-9_-]{3,}/g) || [];
+  return englishWords.length > 0;
+}
+
+function extractTitlePhrases(content: string): string[] {
+  if (!content) {
+    return [];
+  }
+
+  const normalized = normalizeTitleSource(content).replace(/[`*_>#~[\]()]/g, ' ');
+  if (!normalized) {
+    return [];
+  }
+
+  const sentenceParts = normalized
+    .split(/[。！？!?；;，,\n\r]/)
+    .map((part) => normalizeTitleSource(part))
+    .filter((part) => Boolean(part));
+
+  const phrases: string[] = [];
+  for (const sentence of sentenceParts) {
+    const fragments = sentence
+      .split(/(?:并且|而且|以及|然后|同时|另外|还有| and | then )/i)
+      .map((fragment) => normalizeTitleSource(fragment))
+      .filter((fragment) => Boolean(fragment));
+
+    for (const fragment of fragments) {
+      if (phrases.includes(fragment)) {
+        continue;
+      }
+      phrases.push(fragment);
+      if (phrases.length >= 6) {
+        return phrases;
+      }
+    }
+  }
+
+  return phrases;
+}
+
 function makeSessionTitle(content: string): string {
   const oneLine = content.replace(/\s+/g, ' ').trim();
+  if (!oneLine) {
+    return '新会话';
+  }
   if (oneLine.length <= 18) {
     return oneLine;
   }
   return `${oneLine.slice(0, 18)}...`;
+}
+
+function normalizeTitleSource(content: string): string {
+  return content.replace(/\s+/g, ' ').trim();
 }
 
 function shortAgentId(agentId: string): string {
@@ -1025,8 +1598,14 @@ function normalizeStoredRole(role: string): Message['role'] {
 }
 
 function parseStoredSession(session: StoredSession): Session {
+  const normalizedTitle =
+    typeof session.title === 'string' && session.title.trim().length > 0
+      ? session.title
+      : '新会话';
+
   return {
     ...session,
+    title: normalizedTitle,
     createdAt: new Date(session.createdAt),
     updatedAt: new Date(session.updatedAt),
   };
@@ -1066,72 +1645,159 @@ function persistCurrentSessionMessages() {
   void saveSessionMessages();
 }
 
-async function loadSessions() {
-  try {
-    const raw = localStorage.getItem(SESSIONS_STORAGE_KEY);
-    if (!raw) {
-      sessionsByAgent = {};
-      return;
-    }
-
-    const parsed = JSON.parse(raw) as StoredSessionMap;
-    const normalized: Record<string, Session[]> = {};
-    for (const [agentId, storedSessions] of Object.entries(parsed)) {
-      normalized[agentId] = Array.isArray(storedSessions)
-        ? storedSessions.map(parseStoredSession)
-        : [];
-    }
-    sessionsByAgent = normalized;
-  } catch (e) {
-    console.error('Failed to load sessions:', e);
-    sessionsByAgent = {};
+function buildStoredSessionMap(): StoredSessionMap {
+  const payload: StoredSessionMap = {};
+  for (const [agentId, sessionList] of Object.entries(sessionsByAgent)) {
+    payload[agentId] = sessionList.map(toStoredSession);
   }
+  return payload;
+}
+
+function buildStoredMessageMap(): StoredMessageMap {
+  const payload: StoredMessageMap = {};
+  for (const [sessionId, sessionMessages] of Object.entries(messagesBySession)) {
+    payload[sessionId] = sessionMessages.map(toStoredMessage);
+  }
+  return payload;
+}
+
+function buildStorageSnapshot(): StorageSnapshot {
+  return {
+    sessionsByAgent: buildStoredSessionMap(),
+    messagesBySession: buildStoredMessageMap(),
+  };
+}
+
+function normalizeStoredSessions(parsed: StoredSessionMap | null | undefined): Record<string, Session[]> {
+  const normalized: Record<string, Session[]> = {};
+  if (!parsed) {
+    return normalized;
+  }
+  for (const [agentId, storedSessions] of Object.entries(parsed)) {
+    normalized[agentId] = Array.isArray(storedSessions) ? storedSessions.map(parseStoredSession) : [];
+  }
+  return normalized;
+}
+
+function normalizeStoredMessages(parsed: StoredMessageMap | null | undefined): Record<string, Message[]> {
+  const normalized: Record<string, Message[]> = {};
+  if (!parsed) {
+    return normalized;
+  }
+  for (const [sessionId, storedMessages] of Object.entries(parsed)) {
+    normalized[sessionId] = Array.isArray(storedMessages) ? storedMessages.map(parseStoredMessage) : [];
+  }
+  return normalized;
+}
+
+function readStorageSnapshotFromLocalStorage(): StorageSnapshot | null {
+  const sessionRaw = localStorage.getItem(SESSIONS_STORAGE_KEY);
+  const messageRaw = localStorage.getItem(SESSION_MESSAGES_STORAGE_KEY);
+  if (!sessionRaw && !messageRaw) {
+    return null;
+  }
+
+  try {
+    const sessionsByAgent = sessionRaw ? (JSON.parse(sessionRaw) as StoredSessionMap) : {};
+    const messagesBySession = messageRaw ? (JSON.parse(messageRaw) as StoredMessageMap) : {};
+    return {
+      sessionsByAgent,
+      messagesBySession,
+    };
+  } catch (e) {
+    console.error('Failed to load session storage from localStorage:', e);
+    return null;
+  }
+}
+
+function clearLocalStorageSessionData() {
+  localStorage.removeItem(SESSIONS_STORAGE_KEY);
+  localStorage.removeItem(SESSION_MESSAGES_STORAGE_KEY);
+}
+
+async function loadStorageSnapshot(): Promise<StorageSnapshot | null> {
+  try {
+    const snapshot = await invoke<StorageSnapshot>('load_storage_snapshot');
+    if (!snapshot) {
+      return null;
+    }
+    return {
+      sessionsByAgent: snapshot.sessionsByAgent || {},
+      messagesBySession: snapshot.messagesBySession || {},
+    };
+  } catch (e) {
+    console.error('Failed to load session storage from backend:', e);
+    return null;
+  }
+}
+
+async function saveStorageSnapshot(snapshot: StorageSnapshot): Promise<boolean> {
+  try {
+    await invoke('save_storage_snapshot', { snapshot });
+    return true;
+  } catch (e) {
+    console.error('Failed to save session storage to backend:', e);
+    return false;
+  }
+}
+
+async function persistStorageSnapshot(snapshot: StorageSnapshot): Promise<boolean> {
+  const stored = await saveStorageSnapshot(snapshot);
+  if (stored) {
+    clearLocalStorageSessionData();
+    return true;
+  }
+
+  try {
+    localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(snapshot.sessionsByAgent));
+    localStorage.setItem(SESSION_MESSAGES_STORAGE_KEY, JSON.stringify(snapshot.messagesBySession));
+  } catch (e) {
+    console.error('Failed to save session storage to localStorage:', e);
+  }
+  return false;
+}
+
+function isStorageSnapshotEmpty(snapshot: StorageSnapshot): boolean {
+  return (
+    Object.keys(snapshot.sessionsByAgent).length === 0 &&
+    Object.keys(snapshot.messagesBySession).length === 0
+  );
+}
+
+async function loadSessionStore() {
+  const backendSnapshot = await loadStorageSnapshot();
+  if (backendSnapshot) {
+    sessionsByAgent = normalizeStoredSessions(backendSnapshot.sessionsByAgent);
+    messagesBySession = normalizeStoredMessages(backendSnapshot.messagesBySession);
+
+    if (isStorageSnapshotEmpty(backendSnapshot)) {
+      const localSnapshot = readStorageSnapshotFromLocalStorage();
+      if (localSnapshot) {
+        sessionsByAgent = normalizeStoredSessions(localSnapshot.sessionsByAgent);
+        messagesBySession = normalizeStoredMessages(localSnapshot.messagesBySession);
+        await persistStorageSnapshot(localSnapshot);
+      }
+    }
+    return;
+  }
+
+  const localSnapshot = readStorageSnapshotFromLocalStorage();
+  if (!localSnapshot) {
+    sessionsByAgent = {};
+    messagesBySession = {};
+    return;
+  }
+
+  sessionsByAgent = normalizeStoredSessions(localSnapshot.sessionsByAgent);
+  messagesBySession = normalizeStoredMessages(localSnapshot.messagesBySession);
 }
 
 async function saveSessions() {
-  try {
-    const payload: StoredSessionMap = {};
-    for (const [agentId, sessionList] of Object.entries(sessionsByAgent)) {
-      payload[agentId] = sessionList.map(toStoredSession);
-    }
-    localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(payload));
-  } catch (e) {
-    console.error('Failed to save sessions:', e);
-  }
-}
-
-async function loadSessionMessages() {
-  try {
-    const raw = localStorage.getItem(SESSION_MESSAGES_STORAGE_KEY);
-    if (!raw) {
-      messagesBySession = {};
-      return;
-    }
-
-    const parsed = JSON.parse(raw) as StoredMessageMap;
-    const normalized: Record<string, Message[]> = {};
-    for (const [sessionId, storedMessages] of Object.entries(parsed)) {
-      normalized[sessionId] = Array.isArray(storedMessages)
-        ? storedMessages.map(parseStoredMessage)
-        : [];
-    }
-    messagesBySession = normalized;
-  } catch (e) {
-    console.error('Failed to load session messages:', e);
-    messagesBySession = {};
-  }
+  await persistStorageSnapshot(buildStorageSnapshot());
 }
 
 async function saveSessionMessages() {
-  try {
-    const payload: StoredMessageMap = {};
-    for (const [sessionId, sessionMessages] of Object.entries(messagesBySession)) {
-      payload[sessionId] = sessionMessages.map(toStoredMessage);
-    }
-    localStorage.setItem(SESSION_MESSAGES_STORAGE_KEY, JSON.stringify(payload));
-  } catch (e) {
-    console.error('Failed to save session messages:', e);
-  }
+  await persistStorageSnapshot(buildStorageSnapshot());
 }
 
 async function migrateLegacyHistoryIfNeeded() {
@@ -1199,8 +1865,7 @@ function pruneSessionDataByAgents() {
 // 加载 Agent 列表
 async function loadAgents() {
   try {
-    await loadSessions();
-    await loadSessionMessages();
+    await loadSessionStore();
     await migrateLegacyHistoryIfNeeded();
 
     const saved = localStorage.getItem(AGENTS_STORAGE_KEY);

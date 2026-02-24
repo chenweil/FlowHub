@@ -701,10 +701,17 @@ body {
   display: flex;
   gap: 12px;
   align-items: flex-end;
+  position: relative;
+}
+
+.composer-pane {
+  flex: 1;
+  position: relative;
+  display: flex;
 }
 
 #message-input {
-  flex: 1;
+  width: 100%;
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
@@ -750,6 +757,79 @@ body {
 
 #message-input.composer-disabled {
   border-color: var(--border-color);
+}
+
+.slash-command-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 8px);
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 30px rgba(1, 4, 9, 0.45);
+  padding: 6px;
+  z-index: 30;
+}
+
+.slash-command-menu.hidden {
+  display: none;
+}
+
+.slash-command-item {
+  width: 100%;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.slash-command-item:hover,
+.slash-command-item.active {
+  background: rgba(47, 129, 247, 0.14);
+  border-color: rgba(47, 129, 247, 0.35);
+}
+
+.slash-command-main {
+  min-width: 0;
+}
+
+.slash-command-name {
+  font-family: 'Monaco', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.slash-command-desc {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.slash-command-hint {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: #6e7681;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.slash-command-empty {
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 .input-hints {

@@ -70,12 +70,15 @@
         <!-- 输入区域 -->
         <div class="input-container">
           <div class="input-wrapper">
-            <textarea 
-              id="message-input" 
-              placeholder="输入消息..." 
-              rows="1"
-              disabled
-            ></textarea>
+            <div class="composer-pane">
+              <div id="slash-command-menu" class="slash-command-menu hidden"></div>
+              <textarea 
+                id="message-input" 
+                placeholder="输入消息..." 
+                rows="1"
+                disabled
+              ></textarea>
+            </div>
             <button id="send-btn" class="btn-send" disabled>
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="22" y1="2" x2="11" y2="13"></line>
