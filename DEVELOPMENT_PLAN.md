@@ -1,388 +1,164 @@
-# ACP GUI 客户端 - 开发需求与计划
+# ACP GUI 客户端 - 开发需求与计划（v2）
 
 ## 项目概述
 
-基于 ACP (Agent Communication Protocol) 的 GUI 客户端，用于连接和管理多个 AI Agent，提供可视化的对话界面和工具调用展示。
+基于 ACP (Agent Communication Protocol) 的 GUI 客户端，用于连接和管理多个 AI Agent，提供可视化对话界面、工具调用展示与会话管理能力。
 
 **技术栈**: Tauri (Rust) + TypeScript + Vite
 
 ---
 
-## 已完成的工作 ✅
+## 当前状态（2026-02-24）
 
-### 1. 项目调研
-- [x] 分析了 OpenWork、Mossx、Codexia 等参考项目
-- [x] 研究了 ACP 协议规范和通信机制
-- [x] 确定了多 Agent 架构的可行性
+### 已实现能力
 
-### 2. 技术选型
-- [x] 选择了 Tauri + TypeScript + Vite 架构
-- [x] 确定了 WebSocket 作为 ACP 通信协议
-- [x] 选择了轻量级前端方案（原生 TS，无框架）
+| 领域 | 状态 | 说明 |
+| --- | --- | --- |
+| iFlow ACP 链路 | 已完成 | WebSocket + JSON-RPC 会话建立、消息发送、流式回复、任务结束事件 |
+| Agent 管理 | 已完成 | 新增/选择/删除/重连 Agent，进程生命周期管理 |
+| 会话能力 | 部分完成 | 支持多会话创建、切换、删除；会话标题自动生成 |
+| 会话持久化 | 部分完成 | 后端文件存储（app data）+ localStorage 回退与迁移 |
+| 工具调用展示 | 已完成 | tool_call / tool_call_update 可视化展示 |
+| 命令/MCP 注册 | 已完成 | 解析并展示可用命令与 MCP server 列表 |
 
-### 3. 项目初始化
-- [x] 创建了 Tauri 项目框架
-- [x] 配置了开发环境（Rust、Node.js）
-- [x] 设置了项目结构和构建流程
+### 当前命令面（Tauri）
 
-### 4. ACP 协议模块
-- [x] 实现了 WebSocket 连接管理 (`AcpConnection`)
-- [x] 实现了消息序列化和反序列化
-- [x] 支持的消息类型：
-  - `user_message` - 用户消息
-  - `agent_message_chunk` - Agent 流式响应
-  - `agent_thought_chunk` - Agent 思考过程
-  - `tool_call` / `tool_call_update` - 工具调用
-  - `plan` - 执行计划
-  - `stop_reason` / `task_finish` - 任务完成
+| 命令 | 作用 | 当前状态 |
+| --- | --- | --- |
+| `connect_iflow` | 启动并连接 iFlow ACP 会话 | 已使用 |
+| `send_message` | 向当前 Agent 会话发送消息 | 已使用 |
+| `disconnect_agent` | 断开并清理 Agent | 已使用 |
+| `load_storage_snapshot` | 读取会话/消息快照 | 已使用 |
+| `save_storage_snapshot` | 保存会话/消息快照 | 已使用 |
 
-### 5. 基础 UI 实现
-- [x] 创建了对话界面布局
-- [x] 实现了 Agent 列表侧边栏
-- [x] 实现了消息展示区域（支持流式输出）
-- [x] 实现了输入框和发送功能
-- [x] 添加了工具调用面板
-- [x] 实现了添加 Agent 的弹窗
+### 当前架构（真实结构）
 
-### 6. Rust 后端功能
-- [x] `connect_iflow` - 连接 iFlow Agent
-- [x] `send_message` - 发送消息并启动后台监听
-- [x] `stop_receiving` - 停止接收消息
-- [x] `get_messages` - 获取消息历史
-- [x] `disconnect_agent` - 断开 Agent 连接
-- [x] 实现了端口自动分配（查找可用端口）
-- [x] 实现了进程管理和清理
+#### 后端（Rust / Tauri）
 
-### 7. 前端功能
-- [x] Agent 的添加、删除、选择
-- [x] 消息的实时流式显示
-- [x] 工具调用的展示
-- [x] 本地存储（Agent 列表持久化）
-- [x] 连接状态管理
-
-### 8. 环境修复
-- [x] 解决了 Rust 版本兼容性问题
-- [x] 修复了编译错误
-- [x] 添加了必要的图标文件
-- [x] 配置了 Tauri 2.0 环境
-
----
-
-## 剩余计划 📋
-
-### Phase 1: 核心功能增强
-
-#### 1.1 多 Agent 支持 🔥
-**优先级**: 高
-**描述**: 目前只支持 iFlow，需要扩展到其他 Agent
-
-**任务列表**:
-- [ ] 设计统一的 Agent 接口抽象
-- [ ] 支持 Claude Code 集成
-  - [ ] 研究 Claude Code 的 MCP/ACP 协议
-  - [ ] 实现 `connect_claude` 命令
-  - [ ] 适配 Claude 的消息格式
-- [ ] 支持 Codex (OpenAI) 集成
-  - [ ] 研究 Codex CLI 的通信协议
-  - [ ] 实现 `connect_codex` 命令
-- [ ] 支持自定义 Agent 配置
-- [ ] 添加 Agent 类型图标区分
-
-**技术要点**:
-```rust
-// 设计统一的 Agent trait
-pub trait Agent {
-    async fn connect(&mut self) -> Result<(), String>;
-    async fn send(&mut self, message: String) -> Result<(), String>;
-    async fn receive(&mut self) -> Result<String, String>;
-    async fn disconnect(&mut self) -> Result<(), String>;
-}
-```
-
-#### 1.2 多会话标签页 🔥
-**优先级**: 高
-**描述**: 支持多个并行的对话会话
-
-**任务列表**:
-- [ ] 设计会话数据模型
-- [ ] 实现标签页 UI 组件
-- [ ] 实现会话的创建、切换、关闭
-- [ ] 会话状态管理（每个会话独立的消息历史）
-- [ ] 会话持久化到本地存储
-- [ ] 会话重命名功能
-
-**UI 设计**:
-```
-┌─────────────────────────────────────┐
-│ 会话 1 │ 会话 2 │ 会话 3 │ +        │
-├─────────────────────────────────────┤
-│                                     │
-│   对话内容区域                       │
-│                                     │
-└─────────────────────────────────────┘
-```
-
-#### 1.3 工具调用可视化增强
-**优先级**: 中
-**描述**: 更好的 Tool Call 展示和交互
-
-**任务列表**:
-- [ ] 设计工具调用卡片组件
-- [ ] 支持工具调用的展开/折叠
-- [ ] 显示工具调用的执行时间
-- [ ] 支持工具参数的格式化展示（JSON 高亮）
-- [ ] 支持工具执行结果的格式化展示
-- [ ] 添加工具调用历史记录
-- [ ] 支持重新执行工具调用
-
-**UI 改进**:
-- 使用树形结构展示嵌套工具调用
-- 添加工具图标和颜色标识
-- 支持代码高亮显示参数和结果
-
-### Phase 2: 文件与历史管理
-
-#### 2.1 文件浏览器集成
-**优先级**: 中
-**描述**: 集成文件系统浏览功能
-
-**任务列表**:
-- [ ] 添加 Tauri FS 插件权限
-- [ ] 实现文件树组件
-- [ ] 支持文件/文件夹的浏览
-- [ ] 支持文件内容预览（文本、图片）
-- [ ] 实现文件拖拽上传
-- [ ] 支持在对话中引用文件
-- [ ] 实现文件搜索功能
-
-**功能细节**:
-```typescript
-interface FileNode {
-  name: string;
-  path: string;
-  type: 'file' | 'directory';
-  children?: FileNode[];
-  size?: number;
-  modified?: Date;
-}
-```
-
-#### 2.2 会话历史持久化 🔥
-**优先级**: 高
-**描述**: 保存和加载历史会话
-
-**任务列表**:
-- [ ] 设计会话存储格式
-- [ ] 实现 SQLite 或文件系统存储
-- [ ] 自动保存会话历史
-- [ ] 实现历史会话列表
-- [ ] 支持搜索历史会话
-- [ ] 支持导出会话为 Markdown/JSON
-- [ ] 支持导入会话
-- [ ] 实现会话归档功能
-
-**存储设计**:
-```typescript
-interface Session {
-  id: string;
-  title: string;
-  agentId: string;
-  createdAt: Date;
-  updatedAt: Date;
-  messages: Message[];
-  metadata: {
-    totalTokens?: number;
-    toolCallCount?: number;
-  };
-}
-```
-
-### Phase 3: 高级功能
-
-#### 3.1 Git 工作流集成
-**优先级**: 中
-**描述**: 类似 Commander AI 的 Git 集成功能
-
-**任务列表**:
-- [ ] 集成 Git 状态检测
-- [ ] 显示当前分支和修改文件
-- [ ] 支持生成 Commit Message
-- [ ] 支持查看 Diff
-- [ ] 实现一键提交功能
-- [ ] 支持创建分支
-- [ ] 集成 PR/MR 创建
-
-**UI 组件**:
-- Git 状态面板（显示分支、修改文件数）
-- Diff 查看器
-- Commit 对话框
-
-#### 3.2 技能系统
-**优先级**: 低
-**描述**: 保存和复用常用工作流
-
-**任务列表**:
-- [ ] 设计技能数据模型
-- [ ] 实现技能创建界面
-- [ ] 支持参数化技能模板
-- [ ] 实现技能库管理
-- [ ] 支持技能分享/导入
-- [ ] 实现快捷命令（如 `/refactor`, `/test`）
-
-**技能示例**:
-```yaml
-skill:
-  name: "代码重构"
-  description: "分析并重构选中的代码"
-  prompt: "请重构以下代码，提高可读性和性能：\n\n{{code}}"
-  parameters:
-    - name: code
-      type: string
-      required: true
-```
-
-### Phase 4: 优化与扩展
-
-#### 4.1 性能优化
-- [ ] 实现虚拟滚动（处理长对话）
-- [ ] 优化消息渲染性能
-- [ ] 实现增量保存
-- [ ] 优化内存使用
-
-#### 4.2 设置与配置
-- [ ] 实现设置面板
-- [ ] 支持主题切换（深色/浅色）
-- [ ] 支持快捷键配置
-- [ ] 支持代理设置
-- [ ] 支持日志级别配置
-
-#### 4.3 打包与发布
-- [ ] 配置应用签名
-- [ ] 实现自动更新
-- [ ] 创建安装程序
-- [ ] 编写用户文档
-
----
-
-## 技术债务 🔧
-
-1. **错误处理**: 需要统一错误处理机制，提供更好的用户反馈
-2. **状态管理**: 当前状态管理较分散，考虑引入状态管理库
-3. **类型安全**: 前后端类型定义需要同步，考虑使用生成工具
-4. **测试覆盖**: 需要添加单元测试和集成测试
-5. **日志系统**: 需要完善的日志记录和查看功能
-
----
-
-## 当前架构
-
-### 后端 (Rust)
-```
+```text
 src-tauri/src/
-└── main.rs
-    ├── AcpConnection      # WebSocket 连接管理
-    ├── AgentInstance      # Agent 实例管理
-    ├── AppState           # 全局状态
-    ├── Commands           # Tauri 命令
-    │   ├── connect_iflow
-    │   ├── send_message
-    │   ├── stop_receiving
-    │   ├── get_messages
-    │   └── disconnect_agent
-    └── Types
-        ├── AgentInfo
-        ├── Message
-        └── ToolCall
+├── main.rs
+├── commands.rs
+├── manager.rs
+├── models.rs
+├── router.rs
+├── state.rs
+├── storage.rs
+└── agents/
+    ├── iflow_adapter.rs
+    └── mod.rs
 ```
 
-### 前端 (TypeScript)
-```
+#### 前端（TypeScript）
+
+```text
 src/
-├── main.ts              # 主入口，事件处理
-└── styles.css           # 样式
+├── main.ts
+└── styles.css
 
-index.html               # 主页面
+index.html
 ```
 
 ### 数据流
-```
-用户输入 → UI → Tauri Command → Rust 后端 → WebSocket → iFlow
-                                           ↓
-流式响应 ← UI ← Tauri Event ← Rust 后端 ← WebSocket
+
+```text
+用户输入 -> UI -> Tauri Command -> Rust 后端 -> WebSocket -> iFlow
+                                       ↓
+流式响应 <- UI <- Tauri Event   <- Rust 后端 <- WebSocket
 ```
 
 ---
 
-## 下一步行动 🔜
+## 当前迭代计划（唯一执行入口）
 
-根据优先级，建议按以下顺序进行：
+### 迭代策略（参考 CodexMonitor）
 
-1. **立即开始**: 多会话标签页（高优先级，提升用户体验）
-2. **本周内**: 会话历史持久化（高优先级，数据安全）
-3. **下周**: 多 Agent 支持（扩展性）
-4. **后续**: 工具调用可视化、文件浏览器、Git 集成等
-
-### 基于 CodexMonitor 的渐进接入方案（2026-02-24）
-
-#### CodexMonitor 技术概况
-
-| 维度 | 详情 |
-| --- | --- |
-| 技术栈 | Tauri v2 (Rust) + React + TypeScript + Vite |
-| 协议 | 通过 stdio 双向 JSON-RPC 与 `codex app-server` 通信；远程模式用 TCP line-delimited JSON-RPC |
-| 前端架构 | Feature-Sliced（按领域 threads/composer/settings 拆目录，各含 components + hooks） |
-| 后端架构 | Shared Core 模式（领域逻辑在 `shared/`，app 和 daemon 都是薄适配层） |
-| 状态管理 | 会话状态用 `useReducer` + 模块化 reducer slices |
-| IPC 规范 | 所有 Tauri 调用集中 `services/tauri.ts`，事件集中 `services/events.ts` |
-| 迭代节奏 | 6 周 77 个版本，2600+ star，70 contributors |
-
-#### 决策结论
-
-| 项目 | 结论 | 说明 |
+| 项目 | 结论 | 落地策略 |
 | --- | --- | --- |
-| 许可证 | 可复用 | CodexMonitor 为 MIT，可在保留版权与许可证声明前提下复用 |
-| 是否直接 Fork 全量改造 | 不建议 | CodexMonitor 深度绑定 `codex app-server`，直接改成 iFlow 成本高、风险高 |
-| 推荐策略 | 模块借鉴 + 渐进迁移 | 保持当前 iFlow MVP 主链路，按模块吸收成熟工程实践 |
-| iFlow 差异化方向 | 多 Agent 支持 | CodexMonitor 仅支持 Codex，iFlow 支持 iFlow/Claude/Codex 多种 Agent 是核心差异点 |
+| 许可证 | 可复用（MIT） | 保留原版权和许可证声明 |
+| 是否全量 Fork 改造 | 不建议 | 避免大规模协议/架构重写风险 |
+| 推荐方案 | 模块借鉴 + 渐进迁移 | 保持 iFlow 主链路稳定，分阶段演进 |
 
-#### 可复用模块清单（CodexMonitor -> iFlow）
-
-| 优先级 | 可借鉴模块 | 参考来源（CodexMonitor） | 现状落点 | 具体动作 |
-| --- | --- | --- | --- | --- |
-| P0 | 后端 Shared Core 分层 | `src-tauri/src/shared/` 领域逻辑 + 薄适配层 | `iflow_adapter.rs` 体量较大 | 按职责拆分连接、协议、会话、事件模块，保持行为不变 |
-| P0 | 前端 IPC 统一封装 | `services/tauri.ts` 单入口 + `services/events.ts` 事件中心 | `src/main.ts` 直接调用 `invoke/listen` | 抽离 `src/services/tauri.ts` 与 `src/services/events.ts` |
-| P0 | 会话状态 Reducer 模式 | `useThreadsReducer` + 模块化 reducer slices | 状态分散在 `src/main.ts` 多个 map | 引入 `useReducer` + slice 拆分，主入口只保留编排 |
-| P0 | Feature-Sliced 前端目录 | 按领域拆 `features/{threads,composer,settings}/` | 所有逻辑堆在 `main.ts` | 按功能域拆目录，各含 components + hooks |
-| P1 | Workspace 生命周期模型 | `workspaces_core.rs` 独立领域模块 | Agent 与 workspace 当前耦合较紧 | 增加 workspace 实体层，为多工作区并发做准备 |
-| P2 | Git/GitHub 面板能力 | `git_ui_core.rs` + 前端 Git 面板 | 当前未重点建设 | iFlow 主链路稳定后再评估引入 |
-| P2 | 远程 daemon / iOS | TCP JSON-RPC daemon + protocol parity | 当前本地优先 | MVP 阶段暂缓，避免过早复杂化 |
-
-#### 两周落地路线图
+### 两周路线图
 
 | 周次 | 目标 | 交付物 | 验收标准 |
 | --- | --- | --- | --- |
-| 第 1 周 | 稳定内核，降低耦合 | 1) ACP 后端拆分<br>2) 前端 IPC/事件层抽离<br>3) 会话状态集中 | 不回退：连接、发送、流式、tool-call、task-finish 均可用 |
-| 第 2 周 | 补齐工程化能力 | 1) workspace 抽象<br>2) 错误恢复与重连强化<br>3) 测试补全 | `cargo check` 与 `cargo test` 通过，核心手工回归通过 |
+| 第 1 周 | 稳定内核，降低耦合 | 1) ACP 后端拆分<br>2) 前端 IPC/事件层抽离<br>3) 会话状态集中 | 连接、发送、流式、tool-call、task-finish 无回归 |
+| 第 2 周 | 补齐工程化能力 | 1) workspace 抽象<br>2) 重连/错误恢复强化<br>3) 测试补全 | `cargo check` 与 `cargo test` 通过，核心手工回归通过 |
 
-#### 立即执行（P0）
+### 本周执行清单（P0/P1）
 
-| 顺序 | 任务 | 文件 | 参考模式 |
+| 优先级 | 任务 | 文件范围 | 状态 |
 | --- | --- | --- | --- |
-| 1 | 拆分 `iflow_adapter`（等价重构，零行为变化） | `src-tauri/src/agents/iflow_adapter.rs` | CodexMonitor `shared/` core 模式 |
-| 2 | 前端 Feature-Sliced 目录拆分 | `src/main.ts` → `src/features/` | CodexMonitor `features/{threads,composer}/` |
-| 3 | 迁移 Tauri 调用到服务层 | `src/services/tauri.ts`（新增） | CodexMonitor `services/tauri.ts` 单入口 |
-| 4 | 集中事件分发与订阅 | `src/services/events.ts`（新增） | CodexMonitor `services/events.ts` 事件中心 |
-| 5 | 会话状态 reducer 化 | `src/features/threads/` | CodexMonitor `useThreadsReducer` + slices |
+| P0 | 拆分 `iflow_adapter`（等价重构） | `src-tauri/src/agents/iflow_adapter.rs` | 待开始 |
+| P0 | 抽离 Tauri IPC 服务层 | `src/services/tauri.ts`（新增） | 待开始 |
+| P0 | 抽离事件总线层 | `src/services/events.ts`（新增） | 待开始 |
+| P0 | 主入口瘦身（编排化） | `src/main.ts` | 待开始 |
+| P1 | 会话状态 reducer 化 | `src/features/threads/`（新增） | 待开始 |
+| P1 | workspace 领域抽象 | Rust + TS 对应模块 | 待开始 |
+
+---
+
+## 重点能力进度（部分完成项）
+
+### 1.2 多会话（原“多会话标签页”）
+
+| 子项 | 状态 | 说明 |
+| --- | --- | --- |
+| 会话数据模型 | 已完成 | 已有 `Session` 结构与按 Agent 分组模型 |
+| 会话创建/切换/删除 | 已完成 | 已支持新建、切换、删除与默认会话兜底 |
+| 会话独立消息历史 | 已完成 | `messagesBySession` 独立维护 |
+| 会话持久化 | 已完成 | 已接入后端快照 + localStorage 回退 |
+| 标签页式 UI | 未完成 | 当前为侧栏会话列表，不是顶部 tab |
+| 会话重命名 | 未完成 | 仍待实现 |
+
+### 2.2 会话历史持久化
+
+| 子项 | 状态 | 说明 |
+| --- | --- | --- |
+| 存储格式设计 | 已完成 | 已有 `StorageSnapshot`、`StoredSession`、`StoredMessage` |
+| 文件存储 | 已完成 | `storage.rs` 写入 app data，按环境分文件 |
+| 自动保存 | 已完成 | 会话和消息变更后会持久化 |
+| 历史会话展示 | 已完成 | 侧栏可展示会话历史 |
+| localStorage 兼容迁移 | 已完成 | 后端不可用时回退并支持 legacy 迁移 |
+| 历史搜索 | 未完成 | 待实现 |
+| 导入/导出 | 未完成 | 待实现 |
+| 会话归档 | 未完成 | 待实现 |
+
+---
+
+## 中长期 Backlog（待排期）
+
+| 阶段 | 方向 | 主要内容 |
+| --- | --- | --- |
+| Phase A | 多 Agent 扩展 | Claude/Codex 接入、统一 Agent 抽象、自定义 Agent 配置 |
+| Phase B | 文件能力 | 文件树、预览、搜索、对话引用 |
+| Phase C | 工具调用体验 | 工具卡片、参数高亮、历史与重放 |
+| Phase D | Git 工作流 | 状态、diff、commit、分支与 PR 辅助 |
+| Phase E | 体验优化 | 虚拟滚动、性能优化、设置面板、打包发布 |
+
+---
+
+## 技术债务与风险
+
+| 项目 | 当前情况 | 处理方向 |
+| --- | --- | --- |
+| 模块耦合 | `main.ts` 和 `iflow_adapter.rs` 体量偏大 | 按职责拆层，降低耦合 |
+| 状态分散 | 前端状态分布在多个 map 与函数 | reducer 化并按功能域拆分 |
+| 类型契约 | 前后端类型同步靠手工维护 | 增加契约校验与集中定义 |
+| 测试覆盖 | 关键路径有测试但不完整 | 补充核心流程与回归测试 |
+| 错误可观测性 | 仍以控制台日志为主 | 统一错误分类与提示链路 |
 
 ---
 
 ## 参考资源
 
-- [ACP Protocol Specification](https://github.com/...)
-- [Tauri Documentation](https://tauri.app/)
-- [OpenWork](https://github.com/...)
-- [Mossx](https://github.com/...)
-- [Codexia](https://github.com/...)
+- ACP Protocol Specification
+- Tauri Documentation
+- CodexMonitor
+- OpenWork
+- Mossx
+- Codexia
 
 ---
 
