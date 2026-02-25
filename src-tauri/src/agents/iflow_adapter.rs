@@ -536,6 +536,23 @@ pub async fn message_listener_task(
                                         queued_prompts.push_back(prompt);
                                     }
                                 }
+                                Some(ListenerCommand::CancelPrompt) => {
+                                    if let Some(current_session_id) = &session_id {
+                                        let cancel_id = next_rpc_id(&mut rpc_id_counter);
+                                        let cancel_request = build_rpc_request(
+                                            cancel_id,
+                                            "session/cancel",
+                                            json!({
+                                                "sessionId": current_session_id,
+                                            }),
+                                        );
+                                        if let Err(e) = conn.send_message(cancel_request).await {
+                                            println!("[listener] Failed to send session/cancel: {}", e);
+                                        }
+                                    } else {
+                                        println!("[listener] Session not ready, cancel ignored");
+                                    }
+                                }
                                 Some(ListenerCommand::SetModel { model, response }) => {
                                     if let Some(current_session_id) = &session_id {
                                         let switch_id = next_rpc_id(&mut rpc_id_counter);

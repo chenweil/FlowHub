@@ -51,6 +51,7 @@ pub(crate) struct PlanEntry {
 #[derive(Debug)]
 pub(crate) enum ListenerCommand {
     UserPrompt(String),
+    CancelPrompt,
     SetModel {
         model: String,
         response: oneshot::Sender<Result<String, String>>,

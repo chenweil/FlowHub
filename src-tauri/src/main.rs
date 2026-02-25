@@ -10,7 +10,8 @@ mod state;
 mod storage;
 
 use commands::{
-    connect_iflow, disconnect_agent, list_available_models, send_message, switch_agent_model,
+    connect_iflow, disconnect_agent, list_available_models, send_message, stop_message,
+    switch_agent_model,
 };
 use state::AppState;
 use storage::{load_storage_snapshot, save_storage_snapshot};
@@ -21,6 +22,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             connect_iflow,
             send_message,
+            stop_message,
             switch_agent_model,
             list_available_models,
             disconnect_agent,

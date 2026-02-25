@@ -146,6 +146,19 @@ const AGENTS_STORAGE_KEY = 'iflow-agents';
 const SESSIONS_STORAGE_KEY = 'iflow-sessions';
 const SESSION_MESSAGES_STORAGE_KEY = 'iflow-session-messages';
 const LEGACY_MESSAGE_HISTORY_STORAGE_KEY = 'iflow-message-history';
+const MARKDOWN_CODE_BLOCK_PLACEHOLDER_PREFIX = '@@MD_CODE_BLOCK_';
+const MARKDOWN_CODE_SPAN_PLACEHOLDER_PREFIX = '@@MD_CODE_SPAN_';
+const SEND_BUTTON_SEND_ICON = `
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <line x1="22" y1="2" x2="11" y2="13"></line>
+    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+  </svg>
+`;
+const SEND_BUTTON_STOP_ICON = `
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <rect x="6" y="6" width="12" height="12" rx="2"></rect>
+  </svg>
+`;
 const DEFAULT_SLASH_COMMANDS: ReadonlyArray<{ command: string; description: string }> = [
   { command: '/help', description: '显示帮助与命令说明' },
   { command: '/model list', description: '查看可选模型列表' },
@@ -178,9 +191,18 @@ async function init() {
   await loadAgents();
   setupEventListeners();
   setupTauriEventListeners();
+  setSendButtonMode('send', true);
   updateCurrentAgentModelUI();
   refreshComposerState();
   console.log('App initialized');
+}
+
+function setSendButtonMode(mode: 'send' | 'stop', disabled: boolean) {
+  sendBtnEl.disabled = disabled;
+  sendBtnEl.classList.toggle('btn-stop', mode === 'stop');
+  sendBtnEl.setAttribute('aria-label', mode === 'stop' ? '停止生成' : '发送消息');
+  sendBtnEl.title = mode === 'stop' ? '停止生成' : '发送消息';
+  sendBtnEl.innerHTML = mode === 'stop' ? SEND_BUTTON_STOP_ICON : SEND_BUTTON_SEND_ICON;
 }
 
 function setComposerState(state: ComposerState, hint: string) {
@@ -190,15 +212,20 @@ function setComposerState(state: ComposerState, hint: string) {
 
   if (state === 'ready') {
     messageInputEl.disabled = false;
-    sendBtnEl.disabled = false;
+    setSendButtonMode('send', false);
     messageInputEl.placeholder = '输入消息...';
     updateSlashCommandMenu();
     return;
   }
 
   messageInputEl.disabled = true;
-  sendBtnEl.disabled = true;
-  messageInputEl.placeholder = state === 'busy' ? '正在回复中，请等待...' : '请选择 Agent 后开始对话...';
+  if (state === 'busy') {
+    setSendButtonMode('stop', false);
+    messageInputEl.placeholder = '正在回复中，可点击停止按钮中断';
+  } else {
+    setSendButtonMode('send', true);
+    messageInputEl.placeholder = '请选择 Agent 后开始对话...';
+  }
   hideSlashCommandMenu();
 }
 
@@ -216,7 +243,7 @@ function refreshComposerState() {
   }
 
   if (isBusy) {
-    setComposerState('busy', '正在回复中，完成后可继续输入');
+    setComposerState('busy', '正在回复中，可点击停止按钮中断');
     newSessionBtnEl.disabled = true;
     clearChatBtnEl.disabled = true;
     return;
@@ -817,6 +844,10 @@ function setupEventListeners() {
   });
 
   sendBtnEl.addEventListener('click', () => {
+    if (isCurrentAgentBusy()) {
+      void stopCurrentMessage();
+      return;
+    }
     void sendMessage();
   });
   chatMessagesEl.addEventListener('click', onChatMessagesClick);
@@ -2007,7 +2038,14 @@ async function sendMessage() {
     messages = messages.filter((m) => m.id !== sendingMessage.id);
     renderMessages();
 
+    if (inflightSessionByAgent[requestAgentId] !== requestSessionId) {
+      return;
+    }
+
     messageTimeout = window.setTimeout(() => {
+      if (inflightSessionByAgent[requestAgentId] !== requestSessionId) {
+        return;
+      }
       const timeoutMessage: Message = {
         id: `msg-${Date.now()}-timeout`,
         role: 'system',
@@ -2026,9 +2064,38 @@ async function sendMessage() {
     messages = messages.filter((m) => m.id !== sendingMessage.id);
     renderMessages();
 
+    if (inflightSessionByAgent[requestAgentId] !== requestSessionId) {
+      return;
+    }
+
     showError(`发送失败: ${String(error)}`);
     delete inflightSessionByAgent[requestAgentId];
     refreshComposerState();
+  }
+}
+
+async function stopCurrentMessage() {
+  const requestAgentId = currentAgentId;
+  if (!requestAgentId || !inflightSessionByAgent[requestAgentId]) {
+    return;
+  }
+
+  if (messageTimeout) {
+    clearTimeout(messageTimeout);
+    messageTimeout = null;
+  }
+
+  delete inflightSessionByAgent[requestAgentId];
+  messages = messages.filter((m) => !m.id.includes('-sending') && !m.id.includes('-processing'));
+  renderMessages();
+  refreshComposerState();
+
+  try {
+    await invoke('stop_message', {
+      agentId: requestAgentId,
+    });
+  } catch (error) {
+    showError(`停止请求失败: ${String(error)}`);
   }
 }
 
@@ -2837,7 +2904,247 @@ function escapeHtml(text: string): string {
 }
 
 function formatMessageContent(text: string): string {
-  return escapeHtml(text).replace(/\n/g, '<br>');
+  const normalized = text.replace(/\r\n/g, '\n');
+  return `<div class="markdown-content">${renderMarkdownContent(normalized)}</div>`;
+}
+
+function decodeHtmlEntities(value: string): string {
+  const textarea = document.createElement('textarea');
+  textarea.innerHTML = value;
+  return textarea.value;
+}
+
+function sanitizeMarkdownUrl(rawUrl: string, usage: 'link' | 'image'): string | null {
+  const decoded = decodeHtmlEntities(rawUrl).trim();
+  if (!decoded || /\s/.test(decoded)) {
+    return null;
+  }
+
+  if (decoded.startsWith('/') || decoded.startsWith('./') || decoded.startsWith('../')) {
+    return escapeHtml(decoded);
+  }
+
+  if (decoded.startsWith('www.')) {
+    return escapeHtml(`https://${decoded}`);
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(decoded);
+  } catch {
+    return null;
+  }
+
+  const protocol = parsed.protocol.toLowerCase();
+  if (usage === 'image') {
+    if (protocol === 'http:' || protocol === 'https:') {
+      return escapeHtml(decoded);
+    }
+    if (protocol === 'data:' && decoded.toLowerCase().startsWith('data:image/')) {
+      return escapeHtml(decoded);
+    }
+    return null;
+  }
+
+  if (protocol === 'http:' || protocol === 'https:' || protocol === 'mailto:') {
+    return escapeHtml(decoded);
+  }
+  return null;
+}
+
+function renderInlineMarkdown(rawText: string): string {
+  const codeSpanTokens: string[] = [];
+  let html = escapeHtml(rawText);
+
+  html = html.replace(/`([^`\n]+)`/g, (_match, code) => {
+    const tokenIndex = codeSpanTokens.push(`<code>${code}</code>`) - 1;
+    return `${MARKDOWN_CODE_SPAN_PLACEHOLDER_PREFIX}${tokenIndex}@@`;
+  });
+
+  html = html.replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g, (match, alt, url, title) => {
+    const safeUrl = sanitizeMarkdownUrl(url, 'image');
+    if (!safeUrl) {
+      return match;
+    }
+    const titleAttr = title ? ` title="${title}"` : '';
+    return `<img class="md-image" src="${safeUrl}" alt="${alt}" loading="lazy"${titleAttr}>`;
+  });
+
+  html = html.replace(/\[([^\]]+)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g, (match, label, url, title) => {
+    const safeUrl = sanitizeMarkdownUrl(url, 'link');
+    if (!safeUrl) {
+      return match;
+    }
+    const titleAttr = title ? ` title="${title}"` : '';
+    return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer nofollow"${titleAttr}>${label}</a>`;
+  });
+
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/~~([^~]+)~~/g, '<del>$1</del>');
+  html = html.replace(/(^|[^\*])\*([^\*\n]+)\*/g, '$1<em>$2</em>');
+
+  return html.replace(new RegExp(`${MARKDOWN_CODE_SPAN_PLACEHOLDER_PREFIX}(\\d+)@@`, 'g'), (_m, index) => {
+    const tokenIndex = Number.parseInt(index, 10);
+    return codeSpanTokens[tokenIndex] || '';
+  });
+}
+
+function splitMarkdownTableRow(line: string): string[] {
+  const normalized = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+  return normalized.split('|').map((cell) => cell.trim());
+}
+
+function isMarkdownTableDelimiter(line: string): boolean {
+  const cells = splitMarkdownTableRow(line);
+  if (cells.length < 2) {
+    return false;
+  }
+  return cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function isMarkdownTableRow(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed || !trimmed.includes('|')) {
+    return false;
+  }
+  return splitMarkdownTableRow(trimmed).length >= 2;
+}
+
+function renderMarkdownContent(text: string): string {
+  const codeBlockTokens: string[] = [];
+  const withPlaceholders = text.replace(/```([^\n`]*)\n?([\s\S]*?)```/g, (_match, lang, code) => {
+    const language = escapeHtml(String(lang || '').trim().split(/\s+/)[0]);
+    const escapedCode = escapeHtml(String(code || '').replace(/\n$/, ''));
+    const languageClass = language ? ` class="language-${language}"` : '';
+    const tokenIndex =
+      codeBlockTokens.push(
+        `<pre class="md-code-block"><code${languageClass}>${escapedCode}</code></pre>`
+      ) - 1;
+    return `\n${MARKDOWN_CODE_BLOCK_PLACEHOLDER_PREFIX}${tokenIndex}@@\n`;
+  });
+
+  const lines = withPlaceholders.split('\n');
+  const blocks: string[] = [];
+  let paragraphLines: string[] = [];
+  const flushParagraph = () => {
+    if (paragraphLines.length === 0) {
+      return;
+    }
+    blocks.push(`<p>${paragraphLines.map((line) => renderInlineMarkdown(line)).join('<br>')}</p>`);
+    paragraphLines = [];
+  };
+
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index];
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      flushParagraph();
+      index += 1;
+      continue;
+    }
+
+    const codeBlockMatch = trimmed.match(/^@@MD_CODE_BLOCK_(\d+)@@$/);
+    if (codeBlockMatch) {
+      flushParagraph();
+      const tokenIndex = Number.parseInt(codeBlockMatch[1], 10);
+      blocks.push(codeBlockTokens[tokenIndex] || '');
+      index += 1;
+      continue;
+    }
+
+    const headingMatch = line.match(/^\s{0,3}(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      flushParagraph();
+      const level = headingMatch[1].length;
+      blocks.push(`<h${level}>${renderInlineMarkdown(headingMatch[2])}</h${level}>`);
+      index += 1;
+      continue;
+    }
+
+    const hrMatch = line.match(/^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/);
+    if (hrMatch) {
+      flushParagraph();
+      blocks.push('<hr>');
+      index += 1;
+      continue;
+    }
+
+    if (
+      index + 1 < lines.length &&
+      isMarkdownTableRow(line) &&
+      isMarkdownTableDelimiter(lines[index + 1])
+    ) {
+      flushParagraph();
+
+      const headerCells = splitMarkdownTableRow(line);
+      const columnCount = headerCells.length;
+      index += 2;
+
+      const bodyRows: string[][] = [];
+      while (index < lines.length && isMarkdownTableRow(lines[index])) {
+        const rawCells = splitMarkdownTableRow(lines[index]);
+        const rowCells: string[] = [];
+        for (let col = 0; col < columnCount; col += 1) {
+          rowCells.push(rawCells[col] || '');
+        }
+        bodyRows.push(rowCells);
+        index += 1;
+      }
+
+      const headerHtml = `<tr>${headerCells.map((cell) => `<th>${renderInlineMarkdown(cell)}</th>`).join('')}</tr>`;
+      const bodyHtml = bodyRows
+        .map((row) => `<tr>${row.map((cell) => `<td>${renderInlineMarkdown(cell)}</td>`).join('')}</tr>`)
+        .join('');
+      blocks.push(
+        `<div class="md-table-wrap"><table class="md-table"><thead>${headerHtml}</thead><tbody>${bodyHtml}</tbody></table></div>`
+      );
+      continue;
+    }
+
+    if (/^\s{0,3}>\s?/.test(line)) {
+      flushParagraph();
+      const quoteLines: string[] = [];
+      while (index < lines.length && /^\s{0,3}>\s?/.test(lines[index])) {
+        quoteLines.push(lines[index].replace(/^\s{0,3}>\s?/, ''));
+        index += 1;
+      }
+      blocks.push(`<blockquote>${quoteLines.map((item) => renderInlineMarkdown(item)).join('<br>')}</blockquote>`);
+      continue;
+    }
+
+    if (/^\s{0,3}[-*+]\s+/.test(line)) {
+      flushParagraph();
+      const items: string[] = [];
+      while (index < lines.length && /^\s{0,3}[-*+]\s+/.test(lines[index])) {
+        items.push(lines[index].replace(/^\s{0,3}[-*+]\s+/, ''));
+        index += 1;
+      }
+      blocks.push(`<ul>${items.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join('')}</ul>`);
+      continue;
+    }
+
+    if (/^\s{0,3}\d+\.\s+/.test(line)) {
+      flushParagraph();
+      const items: string[] = [];
+      while (index < lines.length && /^\s{0,3}\d+\.\s+/.test(lines[index])) {
+        items.push(lines[index].replace(/^\s{0,3}\d+\.\s+/, ''));
+        index += 1;
+      }
+      blocks.push(`<ol>${items.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join('')}</ol>`);
+      continue;
+    }
+
+    paragraphLines.push(line);
+    index += 1;
+  }
+  flushParagraph();
+
+  return blocks.join('').replace(new RegExp(`${MARKDOWN_CODE_BLOCK_PLACEHOLDER_PREFIX}(\\d+)@@`, 'g'), (_m, token) => {
+    const tokenIndex = Number.parseInt(token, 10);
+    return codeBlockTokens[tokenIndex] || '';
+  });
 }
 
 function formatTime(date: Date): string {

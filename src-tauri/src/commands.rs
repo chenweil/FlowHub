@@ -440,6 +440,24 @@ pub async fn send_message(
     }
 }
 
+/// 停止当前消息生成
+#[tauri::command]
+pub async fn stop_message(state: State<'_, AppState>, agent_id: String) -> Result<(), String> {
+    let (agent_exists, sender) = state.agent_manager.sender_of(&agent_id).await;
+    if !agent_exists {
+        return Err(format!("Agent {} not found", agent_id));
+    }
+
+    if let Some(sender) = sender {
+        sender
+            .send(ListenerCommand::CancelPrompt)
+            .map_err(|e| format!("Failed to queue cancel request: {}", e))?;
+        Ok(())
+    } else {
+        Err("Message sender not available".to_string())
+    }
+}
+
 /// 断开连接
 #[tauri::command]
 pub async fn disconnect_agent(state: State<'_, AppState>, agent_id: String) -> Result<(), String> {
