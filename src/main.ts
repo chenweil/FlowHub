@@ -170,6 +170,7 @@ const TITLE_GENERIC_PHRASES = new Set<string>([
   'okay',
   'thanks',
 ]);
+const ASSISTANT_QUICK_REPLIES: ReadonlyArray<string> = ['继续', '好的'];
 
 // 初始化
 async function init() {
@@ -643,6 +644,7 @@ function updateSlashCommandMenu() {
     `;
     })
     .join('');
+  ensureSlashMenuActiveItemVisible();
 }
 
 function hideSlashCommandMenu() {
@@ -651,6 +653,34 @@ function hideSlashCommandMenu() {
   slashMenuActiveIndex = 0;
   slashCommandMenuEl.classList.add('hidden');
   slashCommandMenuEl.innerHTML = '';
+}
+
+function ensureSlashMenuActiveItemVisible() {
+  if (!slashMenuVisible || slashMenuItems.length === 0) {
+    return;
+  }
+
+  const activeItemEl = slashCommandMenuEl.querySelector(
+    `.slash-command-item[data-index="${slashMenuActiveIndex}"]`
+  ) as HTMLButtonElement | null;
+
+  if (!activeItemEl) {
+    return;
+  }
+
+  const containerTop = slashCommandMenuEl.scrollTop;
+  const containerBottom = containerTop + slashCommandMenuEl.clientHeight;
+  const itemTop = activeItemEl.offsetTop;
+  const itemBottom = itemTop + activeItemEl.offsetHeight;
+
+  if (itemTop < containerTop) {
+    slashCommandMenuEl.scrollTop = itemTop;
+    return;
+  }
+
+  if (itemBottom > containerBottom) {
+    slashCommandMenuEl.scrollTop = itemBottom - slashCommandMenuEl.clientHeight;
+  }
 }
 
 function moveSlashMenuSelection(offset: number) {
@@ -789,6 +819,7 @@ function setupEventListeners() {
   sendBtnEl.addEventListener('click', () => {
     void sendMessage();
   });
+  chatMessagesEl.addEventListener('click', onChatMessagesClick);
   currentAgentModelBtnEl.addEventListener('click', (event) => {
     event.stopPropagation();
     void toggleCurrentAgentModelMenu();
@@ -827,6 +858,73 @@ function onDocumentClick(event: MouseEvent) {
     return;
   }
   closeCurrentAgentModelMenu();
+}
+
+function canUseConversationQuickAction(): boolean {
+  if (!currentAgentId || !currentSessionId) {
+    return false;
+  }
+  const agent = agents.find((item) => item.id === currentAgentId);
+  return Boolean(agent && agent.status === 'connected' && !inflightSessionByAgent[agent.id]);
+}
+
+async function sendPresetMessage(content: string, blockedHint: string) {
+  const text = content.trim();
+  if (!text) {
+    return;
+  }
+
+  if (!canUseConversationQuickAction()) {
+    showError(blockedHint);
+    return;
+  }
+
+  messageInputEl.value = text;
+  messageInputEl.style.height = 'auto';
+  messageInputEl.style.height = `${messageInputEl.scrollHeight}px`;
+  hideSlashCommandMenu();
+  await sendMessage();
+}
+
+async function sendQuickReply(text: string) {
+  await sendPresetMessage(text, '当前无法快捷发送，请等待回复完成或检查连接状态');
+}
+
+async function retryUserMessageById(messageId: string) {
+  const userMessage = messages.find((item) => item.id === messageId && item.role === 'user');
+  if (!userMessage) {
+    showError('未找到可重试的问题');
+    return;
+  }
+  await sendPresetMessage(userMessage.content, '当前无法重试，请等待回复完成或检查连接状态');
+}
+
+function onChatMessagesClick(event: MouseEvent) {
+  const target = event.target as HTMLElement;
+  const quickReplyBtn = target.closest('button[data-quick-reply]') as HTMLButtonElement | null;
+  if (quickReplyBtn) {
+    const reply = quickReplyBtn.dataset.quickReply;
+    if (!reply) {
+      return;
+    }
+
+    event.preventDefault();
+    void sendQuickReply(reply);
+    return;
+  }
+
+  const retryBtn = target.closest('button[data-retry-message-id]') as HTMLButtonElement | null;
+  if (!retryBtn) {
+    return;
+  }
+
+  const retryMessageId = retryBtn.dataset.retryMessageId;
+  if (!retryMessageId) {
+    return;
+  }
+
+  event.preventDefault();
+  void retryUserMessageById(retryMessageId);
 }
 
 function closeCurrentAgentModelMenu() {
@@ -1966,6 +2064,14 @@ function showToolCalls(toolCalls: ToolCall[]) {
 // 渲染消息
 function renderMessages() {
   persistCurrentSessionMessages();
+  let latestInteractiveMessageIndex = -1;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i].role === 'assistant' || messages[i].role === 'user') {
+      latestInteractiveMessageIndex = i;
+      break;
+    }
+  }
+  const quickActionEnabled = canUseConversationQuickAction();
   const thinkingIndicator = isCurrentAgentBusy()
     ? `<div class="thinking-indicator" aria-live="polite" aria-label="iFlow 正在思考">🤔</div>`
     : '';
@@ -1987,7 +2093,7 @@ function renderMessages() {
 
   chatMessagesEl.innerHTML =
     messages
-      .map((msg) => {
+      .map((msg, index) => {
       if (msg.role === 'thought') {
         return `
         <div class="message thought">
@@ -2004,12 +2110,72 @@ function renderMessages() {
       }
 
       const avatar = msg.role === 'user' ? '👤' : msg.role === 'assistant' ? '🤖' : '⚙️';
+      let quickReplySection = '';
+      const isLatestInteractive = index === latestInteractiveMessageIndex;
+
+      if (isLatestInteractive && msg.role === 'assistant') {
+        let retryTargetMessageId = '';
+        for (let i = index - 1; i >= 0; i -= 1) {
+          if (messages[i].role === 'user') {
+            retryTargetMessageId = messages[i].id;
+            break;
+          }
+        }
+
+        quickReplySection = `
+          <div class="assistant-quick-replies">
+            ${ASSISTANT_QUICK_REPLIES.map(
+              (item) => `
+              <button
+                type="button"
+                class="assistant-quick-reply-btn"
+                data-quick-reply="${escapeHtml(item)}"
+                ${quickActionEnabled ? '' : 'disabled'}
+              >
+                ${escapeHtml(item)}
+              </button>
+            `
+            ).join('')}
+            ${
+              retryTargetMessageId
+                ? `
+                <button
+                  type="button"
+                  class="assistant-quick-reply-btn secondary"
+                  data-retry-message-id="${escapeHtml(retryTargetMessageId)}"
+                  ${quickActionEnabled ? '' : 'disabled'}
+                >
+                  重试上一问
+                </button>
+              `
+                : ''
+            }
+          </div>
+        `;
+      }
+
+      if (isLatestInteractive && msg.role === 'user') {
+        quickReplySection = `
+          <div class="assistant-quick-replies">
+            <button
+              type="button"
+              class="assistant-quick-reply-btn secondary"
+              data-retry-message-id="${escapeHtml(msg.id)}"
+              ${quickActionEnabled ? '' : 'disabled'}
+            >
+              重试发送
+            </button>
+          </div>
+        `;
+      }
+
       return `
       <div class="message ${msg.role}">
         <div class="message-avatar">${avatar}</div>
         <div class="message-content">
           ${formatMessageContent(msg.content)}
           <div class="message-time">${formatTime(msg.timestamp)}</div>
+          ${quickReplySection}
         </div>
       </div>
     `;
