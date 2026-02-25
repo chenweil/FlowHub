@@ -21,3 +21,6 @@ src-tauri/target/
 # OpenCode local workspace
 .opencode/
 opencode.jsonc
+
+# Local assistant workspace
+.claude/
