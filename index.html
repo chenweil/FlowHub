@@ -39,6 +39,19 @@
           <div class="current-agent">
             <h2 id="current-agent-name">选择一个 Agent</h2>
             <span id="current-agent-status" class="badge">离线</span>
+            <div class="model-selector">
+              <button
+                id="current-agent-model-btn"
+                class="model-selector-btn"
+                type="button"
+                disabled
+                aria-expanded="false"
+              >
+                <span id="current-agent-model-text">模型：未连接</span>
+                <span class="model-selector-caret">▾</span>
+              </button>
+              <div id="current-agent-model-menu" class="model-selector-menu hidden"></div>
+            </div>
           </div>
           <div class="toolbar-actions">
             <button id="new-session-btn" class="btn-secondary" disabled>新建会话</button>

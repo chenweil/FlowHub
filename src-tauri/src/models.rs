@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::oneshot;
 
 // Agent 状态
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,9 +48,13 @@ pub(crate) struct PlanEntry {
     pub(crate) status: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) enum ListenerCommand {
     UserPrompt(String),
+    SetModel {
+        model: String,
+        response: oneshot::Sender<Result<String, String>>,
+    },
 }
 
 pub(crate) type MessageSender = UnboundedSender<ListenerCommand>;
@@ -60,4 +65,10 @@ pub struct ConnectResponse {
     pub success: bool,
     pub port: u16,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelOption {
+    pub label: String,
+    pub value: String,
 }

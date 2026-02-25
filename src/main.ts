@@ -15,6 +15,9 @@ const cancelAddAgentBtnEl = document.getElementById('cancel-add-agent') as HTMLB
 const confirmAddAgentBtnEl = document.getElementById('confirm-add-agent') as HTMLButtonElement;
 const currentAgentNameEl = document.getElementById('current-agent-name') as HTMLHeadingElement;
 const currentAgentStatusEl = document.getElementById('current-agent-status') as HTMLSpanElement;
+const currentAgentModelBtnEl = document.getElementById('current-agent-model-btn') as HTMLButtonElement;
+const currentAgentModelTextEl = document.getElementById('current-agent-model-text') as HTMLSpanElement;
+const currentAgentModelMenuEl = document.getElementById('current-agent-model-menu') as HTMLDivElement;
 const toolCallsPanelEl = document.getElementById('tool-calls-panel') as HTMLDivElement;
 const toolCallsListEl = document.getElementById('tool-calls-list') as HTMLDivElement;
 const closeToolPanelBtnEl = document.getElementById('close-tool-panel') as HTMLButtonElement;
@@ -32,6 +35,8 @@ interface Agent {
   type: string;
   status: 'connected' | 'disconnected' | 'connecting' | 'error';
   workspacePath: string;
+  iflowPath?: string;
+  selectedModel?: string;
   port?: number;
 }
 
@@ -69,6 +74,11 @@ interface RegistryCommand {
 interface RegistryMcpServer {
   name: string;
   description: string;
+}
+
+interface ModelOption {
+  label: string;
+  value: string;
 }
 
 interface AgentRegistry {
@@ -121,6 +131,10 @@ let sessionsByAgent: Record<string, Session[]> = {};
 let messagesBySession: Record<string, Message[]> = {};
 let inflightSessionByAgent: Record<string, string> = {};
 let registryByAgent: Record<string, AgentRegistry> = {};
+let toolCallsByAgent: Record<string, ToolCall[]> = {};
+let modelOptionsCacheByAgent: Record<string, ModelOption[]> = {};
+let modelSelectorOpen = false;
+let modelSwitchingAgentId: string | null = null;
 let slashMenuItems: SlashMenuItem[] = [];
 let slashMenuVisible = false;
 let slashMenuActiveIndex = 0;
@@ -134,6 +148,9 @@ const SESSION_MESSAGES_STORAGE_KEY = 'iflow-session-messages';
 const LEGACY_MESSAGE_HISTORY_STORAGE_KEY = 'iflow-message-history';
 const DEFAULT_SLASH_COMMANDS: ReadonlyArray<{ command: string; description: string }> = [
   { command: '/help', description: '显示帮助与命令说明' },
+  { command: '/model list', description: '查看可选模型列表' },
+  { command: '/model current', description: '查看当前模型（客户端记录）' },
+  { command: '/model <name|编号>', description: '切换当前 Agent 模型（本地实现）' },
   { command: '/commands', description: '列出可用命令' },
   { command: '/tools', description: '查看工具列表' },
   { command: '/memory show', description: '查看当前记忆' },
@@ -160,6 +177,7 @@ async function init() {
   await loadAgents();
   setupEventListeners();
   setupTauriEventListeners();
+  updateCurrentAgentModelUI();
   refreshComposerState();
   console.log('App initialized');
 }
@@ -241,8 +259,8 @@ function setupTauriEventListeners() {
 
   listen('tool-call', (event) => {
     const payload = event.payload as { agentId?: string; toolCalls?: ToolCall[] };
-    if (payload.agentId === currentAgentId && Array.isArray(payload.toolCalls)) {
-      showToolCalls(payload.toolCalls);
+    if (payload.agentId && Array.isArray(payload.toolCalls)) {
+      mergeToolCalls(payload.agentId, payload.toolCalls);
     }
   });
 
@@ -257,6 +275,19 @@ function setupTauriEventListeners() {
     }
 
     applyAgentRegistry(payload.agentId, payload.commands, payload.mcpServers);
+  });
+
+  listen('model-registry', (event) => {
+    const payload = event.payload as {
+      agentId?: string;
+      models?: unknown[];
+      currentModel?: unknown;
+    };
+    if (!payload.agentId) {
+      return;
+    }
+
+    applyAgentModelRegistry(payload.agentId, payload.models, payload.currentModel);
   });
 
   listen('task-finish', (event) => {
@@ -339,6 +370,9 @@ function appendStreamMessage(
 
   lastMessage.content += normalizedContent;
   lastMessage.timestamp = new Date();
+  if (role === 'assistant') {
+    syncAgentModelFromAboutContent(agentId, lastMessage.content);
+  }
   messagesBySession[sessionId] = sessionMessages;
   touchSessionById(sessionId, sessionMessages);
   void saveSessionMessages();
@@ -366,6 +400,43 @@ function applyAgentRegistry(agentId: string, rawCommands: unknown[] | undefined,
 
   if (agentId === currentAgentId) {
     updateSlashCommandMenu();
+  }
+}
+
+function applyAgentModelRegistry(
+  agentId: string,
+  rawModels: unknown[] | undefined,
+  rawCurrentModel: unknown
+) {
+  const models = Array.isArray(rawModels)
+    ? rawModels.map((item) => normalizeModelOption(item)).filter((item): item is ModelOption => Boolean(item))
+    : [];
+
+  if (models.length > 0) {
+    modelOptionsCacheByAgent[agentId] = models;
+  }
+
+  const currentModel =
+    typeof rawCurrentModel === 'string' && rawCurrentModel.trim().length > 0
+      ? rawCurrentModel.trim()
+      : null;
+
+  const agent = agents.find((item) => item.id === agentId);
+  if (!agent) {
+    return;
+  }
+
+  if (currentModel && agent.selectedModel !== currentModel) {
+    agent.selectedModel = currentModel;
+    void saveAgents();
+    renderAgentList();
+  }
+
+  if (currentAgentId === agentId) {
+    updateCurrentAgentModelUI();
+    if (modelSelectorOpen) {
+      renderCurrentAgentModelMenu(agent, modelOptionsCacheByAgent[agentId] || []);
+    }
   }
 }
 
@@ -718,6 +789,14 @@ function setupEventListeners() {
   sendBtnEl.addEventListener('click', () => {
     void sendMessage();
   });
+  currentAgentModelBtnEl.addEventListener('click', (event) => {
+    event.stopPropagation();
+    void toggleCurrentAgentModelMenu();
+  });
+  currentAgentModelMenuEl.addEventListener('click', (event) => {
+    void onCurrentAgentModelMenuClick(event);
+  });
+  document.addEventListener('click', onDocumentClick);
   agentListEl.addEventListener('click', onAgentListClick);
   sessionListEl.addEventListener('click', onSessionListClick);
 
@@ -734,6 +813,194 @@ function setupEventListeners() {
 
 function hideModal() {
   addAgentModalEl.classList.add('hidden');
+}
+
+function onDocumentClick(event: MouseEvent) {
+  if (!modelSelectorOpen) {
+    return;
+  }
+  const target = event.target as HTMLElement;
+  if (
+    target.closest('#current-agent-model-btn') ||
+    target.closest('#current-agent-model-menu')
+  ) {
+    return;
+  }
+  closeCurrentAgentModelMenu();
+}
+
+function closeCurrentAgentModelMenu() {
+  modelSelectorOpen = false;
+  currentAgentModelBtnEl.setAttribute('aria-expanded', 'false');
+  currentAgentModelMenuEl.classList.add('hidden');
+}
+
+async function toggleCurrentAgentModelMenu() {
+  const agent = currentAgentId ? agents.find((item) => item.id === currentAgentId) : null;
+  if (!agent || agent.status !== 'connected') {
+    return;
+  }
+
+  if (modelSelectorOpen) {
+    closeCurrentAgentModelMenu();
+    return;
+  }
+
+  modelSelectorOpen = true;
+  currentAgentModelBtnEl.setAttribute('aria-expanded', 'true');
+  currentAgentModelMenuEl.classList.remove('hidden');
+  currentAgentModelMenuEl.innerHTML = '<div class="model-selector-state">正在加载模型列表...</div>';
+
+  const options = await loadAgentModelOptions(agent);
+  if (!modelSelectorOpen || currentAgentId !== agent.id) {
+    return;
+  }
+  renderCurrentAgentModelMenu(agent, options);
+}
+
+function resolveModelDisplayName(option: ModelOption): string {
+  const label = option.label.trim();
+  const value = option.value.trim();
+  return label.length > 0 ? label : value;
+}
+
+function isModelOptionActive(agent: Agent, option: ModelOption, index: number): boolean {
+  const selected = agent.selectedModel?.trim().toLowerCase();
+  if (!selected) {
+    return index === 0;
+  }
+  return (
+    option.value.trim().toLowerCase() === selected || option.label.trim().toLowerCase() === selected
+  );
+}
+
+function renderCurrentAgentModelMenu(agent: Agent, options: ModelOption[]) {
+  if (options.length === 0) {
+    currentAgentModelMenuEl.innerHTML =
+      '<div class="model-selector-state">当前无法读取模型列表，请稍后重试。</div>';
+    return;
+  }
+
+  currentAgentModelMenuEl.innerHTML = options
+    .map((option, index) => {
+      const active = isModelOptionActive(agent, option, index);
+      return `
+      <button
+        type="button"
+        class="model-option-item ${active ? 'active' : ''}"
+        data-model-value="${escapeHtml(option.value)}"
+      >
+        <span class="model-option-name">${escapeHtml(resolveModelDisplayName(option))}</span>
+        <span class="model-option-tag">${active ? '当前' : ''}</span>
+      </button>
+    `;
+    })
+    .join('');
+}
+
+async function onCurrentAgentModelMenuClick(event: MouseEvent) {
+  const target = event.target as HTMLElement;
+  const optionBtn = target.closest('button[data-model-value]') as HTMLButtonElement | null;
+  if (!optionBtn) {
+    return;
+  }
+
+  const modelName = optionBtn.dataset.modelValue?.trim();
+  const agent = currentAgentId ? agents.find((item) => item.id === currentAgentId) : null;
+  if (!agent || !modelName || agent.status !== 'connected') {
+    return;
+  }
+
+  const selected = agent.selectedModel?.trim().toLowerCase();
+  if (selected === modelName.toLowerCase()) {
+    closeCurrentAgentModelMenu();
+    return;
+  }
+
+  closeCurrentAgentModelMenu();
+  const error = await switchAgentModel(agent, modelName);
+  if (error) {
+    showError(`模型切换失败：${error}`);
+    return;
+  }
+  showSuccess(`已切换模型：${modelName}`);
+}
+
+function updateCurrentAgentModelUI() {
+  const agent = currentAgentId ? agents.find((item) => item.id === currentAgentId) : null;
+  if (!agent) {
+    currentAgentModelBtnEl.disabled = true;
+    currentAgentModelTextEl.textContent = '模型：未连接';
+    closeCurrentAgentModelMenu();
+    return;
+  }
+
+  if (modelSwitchingAgentId === agent.id) {
+    currentAgentModelBtnEl.disabled = true;
+    currentAgentModelTextEl.textContent = '模型：切换中...';
+    return;
+  }
+
+  currentAgentModelTextEl.textContent = `模型：${currentAgentModelLabel(agent)}`;
+  currentAgentModelBtnEl.title = currentAgentModelLabel(agent);
+  currentAgentModelBtnEl.disabled = agent.status !== 'connected';
+
+  if (agent.status !== 'connected') {
+    closeCurrentAgentModelMenu();
+  }
+}
+
+function normalizeToolCallStatus(rawStatus: string | undefined): ToolCall['status'] {
+  if (rawStatus === 'running' || rawStatus === 'completed' || rawStatus === 'error') {
+    return rawStatus;
+  }
+  return 'pending';
+}
+
+function normalizeToolCallItem(raw: ToolCall): ToolCall {
+  return {
+    id: raw.id?.trim() || `tool-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    name: raw.name?.trim() || 'unknown_tool',
+    status: normalizeToolCallStatus(raw.status),
+    arguments: raw.arguments,
+    output: typeof raw.output === 'string' ? raw.output : undefined,
+  };
+}
+
+function mergeToolCalls(agentId: string, incoming: ToolCall[]) {
+  const current = toolCallsByAgent[agentId] || [];
+  const merged = [...current];
+
+  for (const rawItem of incoming) {
+    const item = normalizeToolCallItem(rawItem);
+    const index = merged.findIndex((existing) => existing.id === item.id);
+    if (index < 0) {
+      merged.push(item);
+      continue;
+    }
+
+    const existing = merged[index];
+    merged[index] = {
+      ...existing,
+      name: item.name || existing.name,
+      status: item.status || existing.status,
+      arguments: item.arguments ?? existing.arguments,
+      output: item.output ?? existing.output,
+    };
+  }
+
+  toolCallsByAgent[agentId] = merged;
+  if (agentId === currentAgentId) {
+    showToolCalls(merged);
+  }
+}
+
+function resetToolCallsForAgent(agentId: string) {
+  delete toolCallsByAgent[agentId];
+  if (agentId === currentAgentId) {
+    toolCallsListEl.innerHTML = '';
+    toolCallsPanelEl.classList.add('hidden');
+  }
 }
 
 function onAgentListClick(event: MouseEvent) {
@@ -809,7 +1076,11 @@ async function clearAllAgents() {
   messagesBySession = {};
   inflightSessionByAgent = {};
   registryByAgent = {};
+  toolCallsByAgent = {};
+  modelOptionsCacheByAgent = {};
+  modelSwitchingAgentId = null;
   hideSlashCommandMenu();
+  closeCurrentAgentModelMenu();
 
   await saveAgents();
   await saveSessions();
@@ -818,8 +1089,10 @@ async function clearAllAgents() {
   renderAgentList();
   renderSessionList();
   renderMessages();
+  toolCallsPanelEl.classList.add('hidden');
   currentAgentNameEl.textContent = '选择一个 Agent';
   updateAgentStatusUI('disconnected');
+  updateCurrentAgentModelUI();
   updateConnectionStatus(false);
   refreshComposerState();
 }
@@ -838,6 +1111,7 @@ async function addAgent(name: string, iflowPath: string, workspacePath: string) 
       agentId,
       iflowPath,
       workspacePath,
+      model: null,
     });
 
     if (!result.success) {
@@ -851,6 +1125,7 @@ async function addAgent(name: string, iflowPath: string, workspacePath: string) 
       type: 'iflow',
       status: 'connected',
       workspacePath,
+      iflowPath,
       port: result.port,
     };
 
@@ -874,9 +1149,11 @@ async function addAgent(name: string, iflowPath: string, workspacePath: string) 
 
 // 选择 Agent
 function selectAgent(agentId: string) {
+  closeCurrentAgentModelMenu();
   currentAgentId = agentId;
   const agent = agents.find((a) => a.id === agentId);
   if (!agent) {
+    updateCurrentAgentModelUI();
     return;
   }
 
@@ -899,8 +1176,22 @@ function selectAgent(agentId: string) {
   }
 
   renderAgentList();
+  updateCurrentAgentModelUI();
   updateConnectionStatus(isConnected);
+  const existingToolCalls = toolCallsByAgent[agentId] || [];
+  if (existingToolCalls.length > 0) {
+    showToolCalls(existingToolCalls);
+  } else {
+    toolCallsPanelEl.classList.add('hidden');
+  }
   refreshComposerState();
+  if (isConnected) {
+    void loadAgentModelOptions(agent).then(() => {
+      if (currentAgentId === agent.id) {
+        updateCurrentAgentModelUI();
+      }
+    });
+  }
 }
 
 async function deleteAgent(agentId: string) {
@@ -918,8 +1209,13 @@ async function deleteAgent(agentId: string) {
   }
 
   agents = agents.filter((a) => a.id !== agentId);
+  if (modelSwitchingAgentId === agentId) {
+    modelSwitchingAgentId = null;
+  }
   delete inflightSessionByAgent[agentId];
   delete registryByAgent[agentId];
+  delete toolCallsByAgent[agentId];
+  delete modelOptionsCacheByAgent[agentId];
 
   const removedSessions = sessionsByAgent[agentId] || [];
   delete sessionsByAgent[agentId];
@@ -928,12 +1224,15 @@ async function deleteAgent(agentId: string) {
   }
 
   if (currentAgentId === agentId) {
+    closeCurrentAgentModelMenu();
     currentAgentId = null;
     currentSessionId = null;
     messages = [];
     renderMessages();
+    toolCallsPanelEl.classList.add('hidden');
     currentAgentNameEl.textContent = '选择一个 Agent';
     updateAgentStatusUI('disconnected');
+    updateCurrentAgentModelUI();
     updateConnectionStatus(false);
   }
 
@@ -1060,14 +1359,16 @@ async function reconnectAgent(agentId: string) {
       error?: string;
     }>('connect_iflow', {
       agentId: agent.id,
-      iflowPath: 'iflow',
+      iflowPath: agent.iflowPath || 'iflow',
       workspacePath: agent.workspacePath,
+      model: agent.selectedModel || null,
     });
 
     if (!result.success) {
       agent.status = 'error';
       showError(result.error || '连接失败');
       renderAgentList();
+      updateCurrentAgentModelUI();
       return;
     }
 
@@ -1083,6 +1384,7 @@ async function reconnectAgent(agentId: string) {
   }
 
   renderAgentList();
+  updateCurrentAgentModelUI();
   refreshComposerState();
 }
 
@@ -1097,6 +1399,7 @@ function updateAgentStatusUI(status: Agent['status']) {
 
   currentAgentStatusEl.textContent = statusText;
   currentAgentStatusEl.className = `badge${status === 'connected' ? ' connected' : ''}`;
+  updateCurrentAgentModelUI();
 }
 
 // 更新连接状态
@@ -1116,11 +1419,461 @@ function updateConnectionStatus(connected: boolean) {
 let messageTimeout: number | null = null;
 const MESSAGE_TIMEOUT_MS = 60000;
 
+interface ParsedModelSlashCommand {
+  kind: 'help' | 'switch' | 'current';
+  targetModel?: string;
+  filterKeyword?: string;
+}
+
+function parseModelSlashCommand(content: string): ParsedModelSlashCommand | null {
+  const trimmed = content.trim();
+  if (!trimmed.startsWith('/')) {
+    return null;
+  }
+
+  const parts = trimmed.split(/\s+/);
+  const command = parts[0].toLowerCase();
+  if (command !== '/model') {
+    return null;
+  }
+
+  if (parts.length === 1) {
+    return { kind: 'help' };
+  }
+
+  const subCommand = parts[1].toLowerCase();
+  if (subCommand === 'list') {
+    const filterKeyword = parts.slice(2).join(' ').trim();
+    return {
+      kind: 'help',
+      filterKeyword: filterKeyword.length > 0 ? filterKeyword : undefined,
+    };
+  }
+
+  if (subCommand === 'current') {
+    return { kind: 'current' };
+  }
+
+  const targetModel = parts.slice(1).join(' ').trim();
+  if (!targetModel) {
+    return { kind: 'help' };
+  }
+
+  return {
+    kind: 'switch',
+    targetModel,
+  };
+}
+
+function normalizeModelOption(raw: unknown): ModelOption | null {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+
+  const record = raw as Record<string, unknown>;
+  const value = typeof record.value === 'string' ? record.value.trim() : '';
+  if (!value) {
+    return null;
+  }
+
+  const labelCandidate = typeof record.label === 'string' ? record.label.trim() : '';
+  return {
+    value,
+    label: labelCandidate || value,
+  };
+}
+
+function filterModelOptions(models: ModelOption[], keyword?: string): ModelOption[] {
+  if (!keyword) {
+    return models;
+  }
+
+  const normalized = keyword.trim().toLowerCase();
+  if (!normalized) {
+    return models;
+  }
+
+  return models.filter((item) => {
+    const haystack = `${item.label} ${item.value}`.toLowerCase();
+    return haystack.includes(normalized);
+  });
+}
+
+function formatModelItem(item: ModelOption, index: number): string {
+  const labelDiffers = item.label.toLowerCase() !== item.value.toLowerCase();
+  return labelDiffers ? `${index}. ${item.value}（${item.label}）` : `${index}. ${item.value}`;
+}
+
+async function loadAgentModelOptions(agent: Agent, forceRefresh = false): Promise<ModelOption[]> {
+  if (!forceRefresh && modelOptionsCacheByAgent[agent.id] && modelOptionsCacheByAgent[agent.id].length > 0) {
+    return modelOptionsCacheByAgent[agent.id];
+  }
+
+  try {
+    const raw = await invoke<unknown[]>('list_available_models', {
+      iflowPath: agent.iflowPath || 'iflow',
+    });
+    const normalized = Array.isArray(raw)
+      ? raw.map((item) => normalizeModelOption(item)).filter((item): item is ModelOption => Boolean(item))
+      : [];
+    if (normalized.length > 0) {
+      modelOptionsCacheByAgent[agent.id] = normalized;
+      if (currentAgentId === agent.id) {
+        updateCurrentAgentModelUI();
+      }
+    }
+    return normalized;
+  } catch (error) {
+    console.error('Load model list error:', error);
+    return [];
+  }
+}
+
+function resolveModelName(input: string, models: ModelOption[]): {
+  modelName: string;
+  fromIndex: boolean;
+  invalidIndex: boolean;
+  fromAlias: boolean;
+} {
+  const normalized = input.trim();
+  if (!normalized) {
+    return { modelName: '', fromIndex: false, invalidIndex: false, fromAlias: false };
+  }
+
+  if (/^\d+$/.test(normalized)) {
+    const index = Number.parseInt(normalized, 10);
+    if (index >= 1 && index <= models.length) {
+      return { modelName: models[index - 1].value, fromIndex: true, invalidIndex: false, fromAlias: false };
+    }
+    return { modelName: '', fromIndex: false, invalidIndex: true, fromAlias: false };
+  }
+
+  const targetLowerCase = normalized.toLowerCase();
+  const matched = models.find(
+    (item) =>
+      item.value.toLowerCase() === targetLowerCase || item.label.toLowerCase() === targetLowerCase
+  );
+  if (matched) {
+    return {
+      modelName: matched.value,
+      fromIndex: false,
+      invalidIndex: false,
+      fromAlias: matched.value.toLowerCase() !== targetLowerCase,
+    };
+  }
+
+  return { modelName: normalized, fromIndex: false, invalidIndex: false, fromAlias: false };
+}
+
+function formatModelList(models: ModelOption[], keyword?: string): string {
+  const filtered = filterModelOptions(models, keyword);
+  if (filtered.length === 0) {
+    return `🧠 未找到匹配模型：${keyword || ''}\n可先输入 /model list 查看全部模型`;
+  }
+
+  const lines = filtered.map((model, index) => formatModelItem(model, index + 1));
+
+  const suffix = keyword ? `（筛选：${keyword}）` : '';
+  return `🧠 可选模型${suffix}：\n${lines.join('\n')}\n\n用法：\n/model current\n/model <模型名>\n/model <编号>\n示例：/model 1`;
+}
+
+function commitSessionMessages(sessionId: string, sessionMessages: Message[]) {
+  messagesBySession[sessionId] = sessionMessages;
+  touchSessionById(sessionId, sessionMessages);
+  void saveSessionMessages();
+
+  if (sessionId === currentSessionId) {
+    messages = sessionMessages;
+    renderMessages();
+    scrollToBottom();
+  } else {
+    renderSessionList();
+  }
+}
+
+function currentAgentModelLabel(agent: Agent): string {
+  const selected = agent.selectedModel?.trim();
+  if (selected && selected.length > 0) {
+    return selected;
+  }
+
+  const cached = modelOptionsCacheByAgent[agent.id];
+  if (cached && cached.length > 0) {
+    return `${resolveModelDisplayName(cached[0])}（默认）`;
+  }
+  return 'iFlow 默认模型';
+}
+
+function parseAboutPayload(content: string): Record<string, unknown> | null {
+  const trimmed = content.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const parseCandidate = (candidate: string): Record<string, unknown> | null => {
+    if (!candidate.startsWith('{') || !candidate.endsWith('}')) {
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return null;
+      }
+      const parsedType = (parsed as Record<string, unknown>).type;
+      if (typeof parsedType !== 'string' || parsedType.toLowerCase() !== 'about') {
+        return null;
+      }
+      return parsed as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  };
+
+  const direct = parseCandidate(trimmed);
+  if (direct) {
+    return direct;
+  }
+
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced?.[1]) {
+    const fromFence = parseCandidate(fenced[1].trim());
+    if (fromFence) {
+      return fromFence;
+    }
+  }
+
+  const inlineObject = trimmed.match(/\{[\s\S]*\}/);
+  if (inlineObject?.[0]) {
+    return parseCandidate(inlineObject[0].trim());
+  }
+
+  return null;
+}
+
+function extractModelNameFromAboutPayload(payload: Record<string, unknown>): string | null {
+  const candidateFields = [payload.modelVersion, payload.model, payload.modelName];
+  for (const field of candidateFields) {
+    if (typeof field === 'string') {
+      const normalized = field.trim();
+      if (normalized.length > 0) {
+        return normalized;
+      }
+    }
+  }
+  return null;
+}
+
+function syncAgentModelFromAboutContent(agentId: string, content: string) {
+  const aboutPayload = parseAboutPayload(content);
+  if (!aboutPayload) {
+    return;
+  }
+
+  const detectedModel = extractModelNameFromAboutPayload(aboutPayload);
+  if (!detectedModel) {
+    return;
+  }
+
+  const agent = agents.find((item) => item.id === agentId);
+  if (!agent || agent.selectedModel === detectedModel) {
+    return;
+  }
+
+  agent.selectedModel = detectedModel;
+  void saveAgents();
+  renderAgentList();
+  if (currentAgentId === agentId) {
+    updateCurrentAgentModelUI();
+  }
+}
+
+async function switchAgentModel(agent: Agent, modelName: string): Promise<string | null> {
+  const targetModel = modelName.trim();
+  if (!targetModel) {
+    return '模型名称不能为空';
+  }
+
+  modelSwitchingAgentId = agent.id;
+  agent.status = 'connecting';
+  renderAgentList();
+  if (currentAgentId === agent.id) {
+    updateAgentStatusUI(agent.status);
+  }
+  refreshComposerState();
+
+  try {
+    const result = await invoke<{
+      success: boolean;
+      port: number;
+      error?: string;
+    }>('switch_agent_model', {
+      agentId: agent.id,
+      iflowPath: agent.iflowPath || 'iflow',
+      workspacePath: agent.workspacePath,
+      model: targetModel,
+    });
+
+    if (!result.success) {
+      throw new Error(result.error || '模型切换失败');
+    }
+
+    agent.status = 'connected';
+    agent.port = result.port;
+    agent.selectedModel = targetModel;
+    await saveAgents();
+    renderAgentList();
+    if (currentAgentId === agent.id) {
+      updateAgentStatusUI(agent.status);
+    }
+    refreshComposerState();
+    return null;
+  } catch (error) {
+    console.error('Model switch error:', error);
+    agent.status = 'error';
+    await saveAgents();
+    renderAgentList();
+    if (currentAgentId === agent.id) {
+      updateAgentStatusUI(agent.status);
+    }
+    refreshComposerState();
+    return String(error);
+  } finally {
+    modelSwitchingAgentId = null;
+    if (currentAgentId === agent.id) {
+      updateCurrentAgentModelUI();
+    }
+  }
+}
+
+async function handleLocalModelCommand(
+  content: string,
+  agentId: string,
+  sessionId: string
+): Promise<boolean> {
+  const command = parseModelSlashCommand(content);
+  if (!command) {
+    return false;
+  }
+
+  const agent = agents.find((item) => item.id === agentId);
+  if (!agent) {
+    showError('当前 Agent 不存在');
+    return true;
+  }
+
+  const sessionMessages = getMessagesForSession(sessionId);
+  const userMessage: Message = {
+    id: `msg-${Date.now()}-model-user`,
+    role: 'user',
+    content,
+    timestamp: new Date(),
+  };
+  sessionMessages.push(userMessage);
+  commitSessionMessages(sessionId, sessionMessages);
+
+  const modelOptions =
+    command.kind === 'current'
+      ? modelOptionsCacheByAgent[agent.id] || []
+      : await loadAgentModelOptions(agent, false);
+
+  if (command.kind === 'help') {
+    const listText =
+      modelOptions.length > 0
+        ? formatModelList(modelOptions, command.filterKeyword)
+        : '⚠ 当前无法读取 iFlow 模型列表。\n你仍可使用 /model <模型名> 直接切换。';
+    const helpMessage: Message = {
+      id: `msg-${Date.now()}-model-help`,
+      role: 'system',
+      content: `${listText}\n\n当前模型（客户端记录）：${currentAgentModelLabel(agent)}`,
+      timestamp: new Date(),
+    };
+    sessionMessages.push(helpMessage);
+    commitSessionMessages(sessionId, sessionMessages);
+    return true;
+  }
+
+  if (command.kind === 'current') {
+    const currentMessage: Message = {
+      id: `msg-${Date.now()}-model-current`,
+      role: 'system',
+      content: `🧩 当前模型（客户端记录）：${currentAgentModelLabel(agent)}\n\n说明：自然语言询问“你是什么模型”可能不可靠。\n如需核验，请发送 /about，返回 JSON 中的 modelVersion 会自动同步到这里。`,
+      timestamp: new Date(),
+    };
+    sessionMessages.push(currentMessage);
+    commitSessionMessages(sessionId, sessionMessages);
+    return true;
+  }
+
+  const resolved = resolveModelName(command.targetModel || '', modelOptions);
+  if (!resolved.modelName) {
+    const invalidMessage: Message = {
+      id: `msg-${Date.now()}-model-invalid`,
+      role: 'system',
+      content: resolved.invalidIndex
+        ? modelOptions.length > 0
+          ? `⚠ 模型编号超出范围。\n\n${formatModelList(modelOptions)}`
+          : '⚠ 当前无法使用编号切换模型，因为模型列表暂不可用。\n请改用：/model <模型名>'
+        : modelOptions.length > 0
+          ? `⚠ 无效模型参数。\n\n${formatModelList(modelOptions)}`
+          : '⚠ 无效模型参数。\n请使用：/model <模型名>',
+      timestamp: new Date(),
+    };
+    sessionMessages.push(invalidMessage);
+    commitSessionMessages(sessionId, sessionMessages);
+    return true;
+  }
+
+  const modelName = resolved.modelName;
+  const progressMessage: Message = {
+    id: `msg-${Date.now()}-model-progress`,
+    role: 'system',
+    content: `🔄 正在切换模型到 ${modelName}...`,
+    timestamp: new Date(),
+  };
+  sessionMessages.push(progressMessage);
+  commitSessionMessages(sessionId, sessionMessages);
+
+  const switchError = await switchAgentModel(agent, modelName);
+  if (!switchError) {
+    progressMessage.content = `✅ 已切换到模型：${modelName}`;
+    if (resolved.fromIndex) {
+      progressMessage.content += '（通过编号选择）';
+    }
+    if (resolved.fromAlias) {
+      progressMessage.content += '（通过显示名匹配）';
+    }
+    progressMessage.content += '\n可发送 /model current 查看客户端记录，或发送 /about 核验服务端实际模型。';
+    progressMessage.timestamp = new Date();
+    commitSessionMessages(sessionId, sessionMessages);
+  } else {
+    progressMessage.content = `❌ 模型切换失败：${switchError}`;
+    progressMessage.timestamp = new Date();
+    commitSessionMessages(sessionId, sessionMessages);
+  }
+
+  return true;
+}
+
 async function sendMessage() {
   const content = messageInputEl.value.trim();
   const requestAgentId = currentAgentId;
   const requestSessionId = currentSessionId;
   if (!content || !requestAgentId || !requestSessionId || inflightSessionByAgent[requestAgentId]) {
+    return;
+  }
+
+  resetToolCallsForAgent(requestAgentId);
+
+  messageInputEl.value = '';
+  messageInputEl.style.height = 'auto';
+  hideSlashCommandMenu();
+
+  const handledByLocalModelCommand = await handleLocalModelCommand(
+    content,
+    requestAgentId,
+    requestSessionId
+  );
+  if (handledByLocalModelCommand) {
     return;
   }
 
@@ -1144,10 +1897,6 @@ async function sendMessage() {
   touchCurrentSession();
   renderMessages();
   scrollToBottom();
-
-  messageInputEl.value = '';
-  messageInputEl.style.height = 'auto';
-  hideSlashCommandMenu();
   inflightSessionByAgent[requestAgentId] = requestSessionId;
   refreshComposerState();
 
@@ -1187,7 +1936,14 @@ async function sendMessage() {
 
 // 显示工具调用
 function showToolCalls(toolCalls: ToolCall[]) {
-  toolCallsListEl.innerHTML = toolCalls
+  if (toolCalls.length === 0) {
+    toolCallsPanelEl.classList.add('hidden');
+    toolCallsListEl.innerHTML = '';
+    return;
+  }
+
+  toolCallsListEl.innerHTML = [...toolCalls]
+    .reverse()
     .map(
       (tc) => `
     <div class="tool-call-item">
@@ -1198,6 +1954,7 @@ function showToolCalls(toolCalls: ToolCall[]) {
           ? `<div class="tool-args">${escapeHtml(JSON.stringify(tc.arguments, null, 2))}</div>`
           : ''
       }
+      ${tc.output ? `<div class="tool-output">${formatMessageContent(tc.output)}</div>` : ''}
     </div>
   `
     )
@@ -1872,12 +2629,14 @@ async function loadAgents() {
     if (!saved) {
       renderAgentList();
       renderSessionList();
+      updateCurrentAgentModelUI();
       return;
     }
 
     agents = JSON.parse(saved) as Agent[];
     agents = agents.map((agent) => ({
       ...agent,
+      iflowPath: agent.iflowPath || 'iflow',
       status: 'disconnected' as const,
       port: undefined,
     }));
@@ -1889,6 +2648,7 @@ async function loadAgents() {
 
     renderAgentList();
     renderSessionList();
+    updateCurrentAgentModelUI();
   } catch (e) {
     console.error('Failed to load agents:', e);
   }

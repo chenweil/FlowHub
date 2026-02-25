@@ -354,6 +354,7 @@ body {
 .current-agent {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
 }
 
@@ -379,6 +380,111 @@ body {
 .toolbar-actions {
   display: flex;
   gap: 8px;
+}
+
+.model-selector {
+  position: relative;
+}
+
+.model-selector-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.model-selector-btn:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  color: var(--text-primary);
+}
+
+.model-selector-btn[aria-expanded='true'] {
+  border-color: var(--accent-color);
+  color: var(--text-primary);
+  background: rgba(47, 129, 247, 0.12);
+}
+
+.model-selector-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.model-selector-caret {
+  font-size: 10px;
+  color: #6e7681;
+}
+
+.model-selector-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  width: 320px;
+  max-width: min(320px, 72vw);
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 30px rgba(1, 4, 9, 0.45);
+  padding: 6px;
+  z-index: 40;
+}
+
+.model-selector-menu.hidden {
+  display: none;
+}
+
+.model-option-item {
+  width: 100%;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.model-option-item:hover {
+  background: rgba(47, 129, 247, 0.14);
+  border-color: rgba(47, 129, 247, 0.35);
+}
+
+.model-option-item.active {
+  background: rgba(35, 134, 54, 0.16);
+  border-color: rgba(35, 134, 54, 0.45);
+}
+
+.model-option-name {
+  min-width: 0;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.model-option-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: #7ee787;
+}
+
+.model-selector-state {
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 /* 按钮样式 */
@@ -688,6 +794,18 @@ body {
   font-size: 12px;
   font-family: 'Monaco', 'Consolas', monospace;
   overflow-x: auto;
+}
+
+.tool-call-item .tool-output {
+  margin-top: 8px;
+  background: rgba(35, 134, 54, 0.08);
+  border: 1px solid rgba(35, 134, 54, 0.28);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* 输入区域 */

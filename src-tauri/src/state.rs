@@ -10,6 +10,8 @@ pub struct AgentInstance {
     pub info: AgentInfo,
     pub process: Option<Child>,
     pub port: u16,
+    pub iflow_path: String,
+    pub model: Option<String>,
     pub(crate) message_sender: Option<MessageSender>,
 }
 

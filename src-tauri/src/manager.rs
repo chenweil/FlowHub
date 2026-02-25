@@ -44,4 +44,9 @@ impl AgentManager {
         let mut agents = self.agents.write().await;
         agents.remove(agent_id)
     }
+
+    pub async fn port_of(&self, agent_id: &str) -> Option<u16> {
+        let agents = self.agents.read().await;
+        agents.get(agent_id).map(|instance| instance.port)
+    }
 }

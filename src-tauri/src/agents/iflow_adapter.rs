@@ -1,4 +1,4 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use futures::{SinkExt, StreamExt};
 use serde_json::{json, Value};
@@ -384,6 +384,71 @@ fn emit_command_registry_from_update(
     }
 }
 
+fn model_registry_payload(payload: &Value) -> Option<(Vec<Value>, Option<String>)> {
+    let models_node = payload
+        .get("models")
+        .or_else(|| payload.get("_meta").and_then(|meta| meta.get("models")))?;
+
+    let available_models = models_node
+        .get("availableModels")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let current_model = models_node
+        .get("currentModelId")
+        .and_then(Value::as_str)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    if available_models.is_empty() && current_model.is_none() {
+        return None;
+    }
+
+    let normalized = available_models
+        .into_iter()
+        .filter_map(|entry| {
+            let value = entry
+                .get("value")
+                .or_else(|| entry.get("id"))
+                .and_then(Value::as_str)
+                .map(|item| item.trim().to_string())
+                .filter(|item| !item.is_empty())?;
+            let label = entry
+                .get("label")
+                .or_else(|| entry.get("name"))
+                .and_then(Value::as_str)
+                .map(|item| item.trim().to_string())
+                .filter(|item| !item.is_empty())
+                .unwrap_or_else(|| value.clone());
+            Some(json!({
+                "label": label,
+                "value": value,
+            }))
+        })
+        .collect::<Vec<_>>();
+
+    if normalized.is_empty() && current_model.is_none() {
+        return None;
+    }
+
+    Some((normalized, current_model))
+}
+
+fn emit_model_registry_payload(app_handle: &tauri::AppHandle, agent_id: &str, payload: &Value) {
+    let Some((models, current_model)) = model_registry_payload(payload) else {
+        return;
+    };
+
+    let _ = app_handle.emit(
+        "model-registry",
+        json!({
+            "agentId": agent_id,
+            "models": models,
+            "currentModel": current_model,
+        }),
+    );
+}
+
 // 查找可用端口
 pub async fn find_available_port() -> Result<u16, String> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -432,6 +497,10 @@ pub async fn message_listener_task(
                 let mut session_load_request_id: Option<i64> = None;
                 let mut session_id: Option<String> = cached_session_id.clone();
                 let mut pending_prompt_request_ids: HashSet<i64> = HashSet::new();
+                let mut pending_set_model_requests: HashMap<
+                    i64,
+                    (tokio::sync::oneshot::Sender<Result<String, String>>, String),
+                > = HashMap::new();
 
                 let init_id = next_rpc_id(&mut rpc_id_counter);
                 let init_request =
@@ -465,6 +534,29 @@ pub async fn message_listener_task(
                                     } else {
                                         println!("[listener] Session not ready, prompt queued");
                                         queued_prompts.push_back(prompt);
+                                    }
+                                }
+                                Some(ListenerCommand::SetModel { model, response }) => {
+                                    if let Some(current_session_id) = &session_id {
+                                        let switch_id = next_rpc_id(&mut rpc_id_counter);
+                                        let switch_request = build_rpc_request(
+                                            switch_id,
+                                            "session/set_model",
+                                            json!({
+                                                "sessionId": current_session_id,
+                                                "modelId": model,
+                                            }),
+                                        );
+                                        if let Err(e) = conn.send_message(switch_request).await {
+                                            let _ = response.send(Err(format!(
+                                                "Failed to send session/set_model: {}",
+                                                e
+                                            )));
+                                            break;
+                                        }
+                                        pending_set_model_requests.insert(switch_id, (response, model));
+                                    } else {
+                                        let _ = response.send(Err("Session not ready".to_string()));
                                     }
                                 }
                                 None => {
@@ -591,6 +683,7 @@ pub async fn message_listener_task(
 
                                             if let Some(result) = message_json.get("result") {
                                                 emit_command_registry_payload(&app_handle, &agent_id, result);
+                                                emit_model_registry_payload(&app_handle, &agent_id, result);
                                             }
 
                                             let _ = app_handle.emit(
@@ -656,6 +749,7 @@ pub async fn message_listener_task(
 
                                             if let Some(result) = message_json.get("result") {
                                                 emit_command_registry_payload(&app_handle, &agent_id, result);
+                                                emit_model_registry_payload(&app_handle, &agent_id, result);
                                             }
 
                                             if let Some(current_session_id) = &session_id {
@@ -696,6 +790,37 @@ pub async fn message_listener_task(
                                                 .and_then(Value::as_str)
                                                 .unwrap_or("completed");
                                             emit_task_finish(&app_handle, &agent_id, reason).await;
+                                            continue;
+                                        }
+
+                                        if let Some((response, requested_model)) =
+                                            pending_set_model_requests.remove(&response_id)
+                                        {
+                                            if let Some(error) = message_json.get("error") {
+                                                let _ = response.send(Err(format!(
+                                                    "session/set_model failed: {}",
+                                                    error
+                                                )));
+                                                continue;
+                                            }
+
+                                            let current_model = message_json
+                                                .get("result")
+                                                .and_then(|result| result.get("currentModelId"))
+                                                .and_then(Value::as_str)
+                                                .map(|value| value.trim().to_string())
+                                                .filter(|value| !value.is_empty())
+                                                .unwrap_or(requested_model);
+
+                                            let _ = app_handle.emit(
+                                                "model-registry",
+                                                json!({
+                                                    "agentId": &agent_id,
+                                                    "models": [],
+                                                    "currentModel": current_model,
+                                                }),
+                                            );
+                                            let _ = response.send(Ok(current_model));
                                             continue;
                                         }
                                     }
