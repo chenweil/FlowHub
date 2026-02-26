@@ -1,5 +1,5 @@
 // iFlow Workspace - Main Entry
-import { invoke } from '@tauri-apps/api/core';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
 // DOM 元素
@@ -226,7 +226,15 @@ const TITLE_GENERIC_PHRASES = new Set<string>([
 ]);
 const ASSISTANT_QUICK_REPLIES: ReadonlyArray<string> = ['继续', '好的'];
 const HTML_ARTIFACT_PATH_PATTERN = /\.html?$/i;
+const HTML_ARTIFACT_JSON_PATH_PATTERN =
+  /["']?(?:file_path|absolute_path|path)["']?\s*[:=]\s*["']([^"'\n]+\.html?)["']/gi;
+const HTML_ARTIFACT_GENERIC_PATH_PATTERN =
+  /(?:file:\/\/)?(?:[A-Za-z]:[\\/]|\/|\.{1,2}\/|~\/)[^\s"'`<>|]+\.html?/gi;
+const HTML_ARTIFACT_BARE_FILE_PATTERN = /[^\s"'`<>|/\\]+\.html?/gi;
 const ARTIFACT_PREVIEW_CACHE_LIMIT = 8;
+const ARTIFACT_PREVIEW_READ_TIMEOUT_MS = 12000;
+const ARTIFACT_PREVIEW_CACHE_URL_PREFIX = 'url:';
+const ARTIFACT_PREVIEW_CACHE_HTML_PREFIX = 'html:';
 
 function generateAcpSessionId(): string {
   const randomUuid =
@@ -1068,9 +1076,17 @@ async function retryUserMessageById(messageId: string) {
 
 function stripArtifactPathPunctuation(token: string): string {
   return token
-    .replace(/^[`"'([{<]+/, '')
-    .replace(/[`"')\]}>.,;:!?]+$/, '')
+    .replace(/^[`"'([{<\u300c\u300e\u3010\u3014\u2018\u201c]+/, '')
+    .replace(/[`"')\]}>.,;:!?\u3002\uff0c\uff1b\uff1a\uff01\uff1f\u3001\u300d\u300f\u3011\u3015\u2019\u201d]+$/, '')
     .trim();
+}
+
+function normalizeArtifactPathInput(raw: string): string {
+  let candidate = raw.trim();
+  if (/^@(?=\/|\.{1,2}\/|~\/|[A-Za-z]:[\\/])/.test(candidate)) {
+    candidate = candidate.slice(1);
+  }
+  return candidate;
 }
 
 function normalizeArtifactPathCandidate(raw: string): string | null {
@@ -1079,7 +1095,19 @@ function normalizeArtifactPathCandidate(raw: string): string | null {
     return null;
   }
 
+  candidate = candidate
+    .replace(/\\\//g, '/')
+    .replace(/^[`"']?(?:file_path|absolute_path|path)[`"']?\s*[:=]\s*/i, '');
+  candidate = stripArtifactPathPunctuation(candidate);
+  if (!candidate) {
+    return null;
+  }
+
   candidate = candidate.replace(/^\[diff\]\s*/i, '').trim();
+  if (!candidate) {
+    return null;
+  }
+  candidate = normalizeArtifactPathInput(candidate);
   if (!candidate) {
     return null;
   }
@@ -1107,6 +1135,35 @@ function extractHtmlArtifactPaths(text: string): string[] {
       unique.add(normalized);
     }
   };
+
+  HTML_ARTIFACT_JSON_PATH_PATTERN.lastIndex = 0;
+  let jsonMatch = HTML_ARTIFACT_JSON_PATH_PATTERN.exec(text);
+  while (jsonMatch) {
+    addCandidate(jsonMatch[1]);
+    jsonMatch = HTML_ARTIFACT_JSON_PATH_PATTERN.exec(text);
+  }
+
+  HTML_ARTIFACT_GENERIC_PATH_PATTERN.lastIndex = 0;
+  let genericMatch = HTML_ARTIFACT_GENERIC_PATH_PATTERN.exec(text);
+  while (genericMatch) {
+    addCandidate(genericMatch[0]);
+    genericMatch = HTML_ARTIFACT_GENERIC_PATH_PATTERN.exec(text);
+  }
+
+  HTML_ARTIFACT_BARE_FILE_PATTERN.lastIndex = 0;
+  let bareMatch = HTML_ARTIFACT_BARE_FILE_PATTERN.exec(text);
+  while (bareMatch) {
+    const matchStart = bareMatch.index;
+    if (matchStart > 0) {
+      const previousChar = text[matchStart - 1];
+      if (previousChar === '/' || previousChar === '\\') {
+        bareMatch = HTML_ARTIFACT_BARE_FILE_PATTERN.exec(text);
+        continue;
+      }
+    }
+    addCandidate(bareMatch[0]);
+    bareMatch = HTML_ARTIFACT_BARE_FILE_PATTERN.exec(text);
+  }
 
   const markdownLinkPattern = /\[[^\]]+\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
   let markdownMatch = markdownLinkPattern.exec(text);
@@ -1217,12 +1274,51 @@ function setArtifactPreviewCache(key: string, html: string) {
 }
 
 function getArtifactPreviewCache(key: string): string | null {
-  const html = artifactPreviewCacheByKey.get(key);
-  if (!html) {
+  const payload = artifactPreviewCacheByKey.get(key);
+  if (!payload) {
     return null;
   }
   touchArtifactCacheKey(key);
-  return html;
+  return payload;
+}
+
+function encodeArtifactPreviewCacheEntry(mode: 'url' | 'html', value: string): string {
+  return `${mode === 'url' ? ARTIFACT_PREVIEW_CACHE_URL_PREFIX : ARTIFACT_PREVIEW_CACHE_HTML_PREFIX}${value}`;
+}
+
+function decodeArtifactPreviewCacheEntry(payload: string): { mode: 'url' | 'html'; value: string } | null {
+  if (payload.startsWith(ARTIFACT_PREVIEW_CACHE_URL_PREFIX)) {
+    return {
+      mode: 'url',
+      value: payload.slice(ARTIFACT_PREVIEW_CACHE_URL_PREFIX.length),
+    };
+  }
+  if (payload.startsWith(ARTIFACT_PREVIEW_CACHE_HTML_PREFIX)) {
+    return {
+      mode: 'html',
+      value: payload.slice(ARTIFACT_PREVIEW_CACHE_HTML_PREFIX.length),
+    };
+  }
+  return null;
+}
+
+function applyArtifactPreviewContent(mode: 'url' | 'html', value: string) {
+  if (mode === 'url') {
+    artifactPreviewFrameEl.srcdoc = '';
+    artifactPreviewFrameEl.src = value;
+    return;
+  }
+
+  artifactPreviewFrameEl.removeAttribute('src');
+  artifactPreviewFrameEl.srcdoc = value;
+}
+
+function createArtifactPreviewTimeoutPromise(): Promise<never> {
+  return new Promise<never>((_resolve, reject) => {
+    window.setTimeout(() => {
+      reject(new Error(`读取超时（>${ARTIFACT_PREVIEW_READ_TIMEOUT_MS / 1000}s）`));
+    }, ARTIFACT_PREVIEW_READ_TIMEOUT_MS);
+  });
 }
 
 function clearArtifactPreviewCacheForAgent(agentId: string) {
@@ -1260,7 +1356,7 @@ async function openArtifactPreview(path: string) {
     return;
   }
 
-  const normalizedPath = path.trim();
+  const normalizedPath = normalizeArtifactPathInput(path.trim());
   if (!normalizedPath) {
     showError('无效的 Artifact 路径');
     return;
@@ -1276,40 +1372,100 @@ async function openArtifactPreview(path: string) {
 
   const cachedHtml = getArtifactPreviewCache(cacheKey);
   if (cachedHtml) {
-    artifactPreviewFrameEl.srcdoc = cachedHtml;
-    artifactPreviewLastKey = cacheKey;
-    return;
+    const cachedEntry = decodeArtifactPreviewCacheEntry(cachedHtml);
+    if (cachedEntry) {
+      applyArtifactPreviewContent(cachedEntry.mode, cachedEntry.value);
+      artifactPreviewLastKey = cacheKey;
+      return;
+    }
+    artifactPreviewCacheByKey.delete(cacheKey);
   }
 
-  artifactPreviewFrameEl.srcdoc = renderArtifactPlaceholder(
-    '正在加载 HTML 预览',
-    '正在读取文件内容，请稍候...'
+  applyArtifactPreviewContent(
+    'html',
+    renderArtifactPlaceholder(
+      '正在加载 HTML 预览',
+      '正在读取文件内容，请稍候...'
+    )
   );
 
   const requestToken = artifactPreviewRequestToken + 1;
   artifactPreviewRequestToken = requestToken;
-
-  try {
-    const html = await invoke<string>('read_html_artifact', {
-      agentId: agent.id,
-      filePath: normalizedPath,
-    });
-
+  const hardTimeoutId = window.setTimeout(() => {
     if (artifactPreviewRequestToken !== requestToken) {
       return;
     }
-    setArtifactPreviewCache(cacheKey, html);
-    artifactPreviewLastKey = cacheKey;
-    artifactPreviewFrameEl.srcdoc = html;
-  } catch (error) {
-    if (artifactPreviewRequestToken !== requestToken) {
+    if (artifactPreviewLastKey === cacheKey) {
       return;
     }
     artifactPreviewLastKey = null;
-    artifactPreviewFrameEl.srcdoc = renderArtifactPlaceholder(
-      'HTML 预览失败',
-      `无法读取文件：${String(error)}`
+    applyArtifactPreviewContent(
+      'html',
+      renderArtifactPlaceholder(
+        'HTML 预览失败',
+        `读取超时（>${ARTIFACT_PREVIEW_READ_TIMEOUT_MS / 1000}s）`
+      )
     );
+  }, ARTIFACT_PREVIEW_READ_TIMEOUT_MS + 1000);
+
+  let readError: unknown = null;
+  try {
+    const html = await Promise.race([
+      invoke<string>('read_html_artifact', {
+        agentId: agent.id,
+        filePath: normalizedPath,
+      }),
+      createArtifactPreviewTimeoutPromise(),
+    ]);
+
+    if (artifactPreviewRequestToken !== requestToken) {
+      return;
+    }
+
+    setArtifactPreviewCache(cacheKey, encodeArtifactPreviewCacheEntry('html', html));
+    artifactPreviewLastKey = cacheKey;
+    applyArtifactPreviewContent('html', html);
+  } catch (error) {
+    readError = error;
+  }
+
+  try {
+    const absolutePath = await Promise.race([
+      invoke<string>('resolve_html_artifact_path', {
+        agentId: agent.id,
+        filePath: normalizedPath,
+      }),
+      createArtifactPreviewTimeoutPromise(),
+    ]);
+
+    if (artifactPreviewRequestToken !== requestToken) {
+      return;
+    }
+
+    const assetUrl = convertFileSrc(absolutePath);
+    setArtifactPreviewCache(cacheKey, encodeArtifactPreviewCacheEntry('url', assetUrl));
+    artifactPreviewLastKey = cacheKey;
+    applyArtifactPreviewContent('url', assetUrl);
+  } catch (resolveError) {
+    if (artifactPreviewRequestToken !== requestToken) {
+      return;
+    }
+    if (!readError) {
+      return;
+    }
+
+    artifactPreviewLastKey = null;
+    const readMessage = readError instanceof Error ? readError.message : String(readError);
+    const resolveMessage = resolveError instanceof Error ? resolveError.message : String(resolveError);
+    applyArtifactPreviewContent(
+      'html',
+      renderArtifactPlaceholder(
+        'HTML 预览失败',
+        `内容读取失败：${readMessage}\nURL 预览失败：${resolveMessage}`
+      )
+    );
+  } finally {
+    window.clearTimeout(hardTimeoutId);
   }
 }
 

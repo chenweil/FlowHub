@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -857,16 +858,14 @@ async fn resolve_html_artifact_path_in_workspace(
         )
     })?;
 
-    let mut requested_path = file_path.trim().to_string();
-    if requested_path.starts_with("file://") {
-        requested_path = requested_path.trim_start_matches("file://").to_string();
-    }
+    let requested_path = normalize_artifact_request_path(file_path);
     if requested_path.is_empty() {
         return Err("Artifact file path cannot be empty".to_string());
     }
 
     let requested = PathBuf::from(&requested_path);
-    let target_path = if requested.is_absolute() {
+    let is_absolute_request = requested.is_absolute();
+    let target_path = if is_absolute_request {
         requested
     } else {
         workspace_root.join(requested)
@@ -880,7 +879,7 @@ async fn resolve_html_artifact_path_in_workspace(
         )
     })?;
 
-    if !canonical_target.starts_with(&workspace_root) {
+    if !is_absolute_request && !canonical_target.starts_with(&workspace_root) {
         return Err("Artifact path is outside workspace".to_string());
     }
 
@@ -896,22 +895,92 @@ async fn resolve_html_artifact_path_in_workspace(
     Ok(canonical_target)
 }
 
-/// 读取 HTML Artifact（限制在当前 Agent 工作目录内）
-#[tauri::command]
-pub async fn read_html_artifact(
-    state: State<'_, AppState>,
-    agent_id: String,
-    file_path: String,
-) -> Result<String, String> {
-    let workspace_path = state
-        .agent_manager
-        .workspace_path_of(&agent_id)
-        .await
-        .ok_or_else(|| format!("Agent {} not found", agent_id))?;
-    let canonical_target =
-        resolve_html_artifact_path_in_workspace(&workspace_path, &file_path).await?;
+fn is_windows_absolute_like(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    if bytes.len() < 3 {
+        return false;
+    }
+    bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/')
+}
 
-    let metadata = tokio::fs::metadata(&canonical_target).await.map_err(|e| {
+fn trim_artifact_path_wrappers(path: &str) -> String {
+    path.trim()
+        .trim_matches(|ch: char| {
+            matches!(
+                ch,
+                '"' | '\''
+                    | '`'
+                    | '('
+                    | ')'
+                    | '['
+                    | ']'
+                    | '{'
+                    | '}'
+                    | '<'
+                    | '>'
+                    | ','
+                    | '.'
+                    | ';'
+                    | ':'
+                    | '!'
+                    | '?'
+                    | '，'
+                    | '。'
+                    | '；'
+                    | '：'
+                    | '！'
+                    | '？'
+                    | '、'
+                    | '「'
+                    | '」'
+                    | '『'
+                    | '』'
+                    | '【'
+                    | '】'
+            )
+        })
+        .to_string()
+}
+
+fn strip_json_like_artifact_prefix(path: &str) -> String {
+    let lowered = path.to_lowercase();
+    for marker in ["file_path", "absolute_path", "path"] {
+        if let Some(marker_pos) = lowered.find(marker) {
+            let marker_end = marker_pos + marker.len();
+            let rest = &path[marker_end..];
+            if let Some(colon_pos) = rest.find(':') {
+                let after_colon = &rest[colon_pos + 1..];
+                return trim_artifact_path_wrappers(after_colon);
+            }
+        }
+    }
+    path.to_string()
+}
+
+fn normalize_artifact_request_path(file_path: &str) -> String {
+    let trimmed = trim_artifact_path_wrappers(file_path);
+    let without_file_prefix = trimmed.strip_prefix("file://").unwrap_or(&trimmed);
+    let mut normalized = strip_json_like_artifact_prefix(without_file_prefix);
+    normalized = trim_artifact_path_wrappers(&normalized);
+
+    if let Some(rest) = normalized.strip_prefix('@') {
+        if rest.starts_with('/')
+            || rest.starts_with("./")
+            || rest.starts_with("../")
+            || rest.starts_with("~/")
+            || is_windows_absolute_like(rest)
+        {
+            return rest.to_string();
+        }
+    }
+
+    normalized
+}
+
+async fn validate_html_artifact_file(canonical_target: &Path) -> Result<(), String> {
+    let metadata = tokio::fs::metadata(canonical_target).await.map_err(|e| {
         format!(
             "Failed to stat artifact {}: {}",
             canonical_target.display(),
@@ -927,8 +996,50 @@ pub async fn read_html_artifact(
             MAX_HTML_ARTIFACT_SIZE
         ));
     }
+    Ok(())
+}
 
-    tokio::fs::read_to_string(&canonical_target)
+/// 解析 HTML Artifact 的绝对路径（限制在当前 Agent 工作目录内）
+#[tauri::command]
+pub async fn resolve_html_artifact_path(
+    state: State<'_, AppState>,
+    agent_id: String,
+    file_path: String,
+) -> Result<String, String> {
+    let workspace_path = state
+        .agent_manager
+        .workspace_path_of(&agent_id)
+        .await
+        .ok_or_else(|| format!("Agent {} not found", agent_id))?;
+    let canonical_target =
+        resolve_html_artifact_path_in_workspace(&workspace_path, &file_path).await?;
+    validate_html_artifact_file(&canonical_target).await?;
+    Ok(canonical_target.to_string_lossy().to_string())
+}
+
+/// 读取 HTML Artifact（限制在当前 Agent 工作目录内）
+#[tauri::command]
+pub async fn read_html_artifact(
+    state: State<'_, AppState>,
+    agent_id: String,
+    file_path: String,
+) -> Result<String, String> {
+    let started_at = Instant::now();
+    println!(
+        "[read_html_artifact] start agent={} path={}",
+        agent_id, file_path
+    );
+
+    let workspace_path = state
+        .agent_manager
+        .workspace_path_of(&agent_id)
+        .await
+        .ok_or_else(|| format!("Agent {} not found", agent_id))?;
+    let canonical_target =
+        resolve_html_artifact_path_in_workspace(&workspace_path, &file_path).await?;
+    validate_html_artifact_file(&canonical_target).await?;
+
+    let content = tokio::fs::read_to_string(&canonical_target)
         .await
         .map_err(|e| {
         format!(
@@ -936,7 +1047,17 @@ pub async fn read_html_artifact(
             canonical_target.display(),
             e
         )
-    })
+    })?;
+
+    println!(
+        "[read_html_artifact] done agent={} path={} bytes={} elapsed={}ms",
+        agent_id,
+        canonical_target.display(),
+        content.len(),
+        started_at.elapsed().as_millis()
+    );
+
+    Ok(content)
 }
 
 /// 发送消息
