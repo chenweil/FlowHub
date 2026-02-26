@@ -1,6 +1,7 @@
 // iFlow Workspace - Main Entry
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getVersion } from '@tauri-apps/api/app';
 
 // DOM 元素
 const addAgentBtnEl = document.getElementById('add-agent-btn') as HTMLButtonElement;
@@ -35,13 +36,14 @@ const closeToolPanelBtnEl = document.getElementById('close-tool-panel') as HTMLB
 const newSessionBtnEl = document.getElementById('new-session-btn') as HTMLButtonElement;
 const clearChatBtnEl = document.getElementById('clear-chat-btn') as HTMLButtonElement;
 const connectionStatusEl = document.getElementById('connection-status') as HTMLDivElement;
-const clearAllAgentsBtnEl = document.getElementById('clear-all-agents') as HTMLButtonElement;
+const clearAllSessionsBtnEl = document.getElementById('clear-all-sessions') as HTMLButtonElement;
 const inputStatusHintEl = document.getElementById('input-status-hint') as HTMLSpanElement;
 const slashCommandMenuEl = document.getElementById('slash-command-menu') as HTMLDivElement;
 const artifactPreviewModalEl = document.getElementById('artifact-preview-modal') as HTMLDivElement;
 const closeArtifactPreviewBtnEl = document.getElementById('close-artifact-preview') as HTMLButtonElement;
 const artifactPreviewPathEl = document.getElementById('artifact-preview-path') as HTMLDivElement;
 const artifactPreviewFrameEl = document.getElementById('artifact-preview-frame') as HTMLIFrameElement;
+const appVersionEl = document.getElementById('app-version') as HTMLDivElement;
 
 // 类型定义
 interface Agent {
@@ -247,6 +249,7 @@ function generateAcpSessionId(): string {
 // 初始化
 async function init() {
   console.log('Initializing app...');
+  await syncAppVersion();
   await loadAgents();
   setupEventListeners();
   setupTauriEventListeners();
@@ -255,6 +258,16 @@ async function init() {
   updateCurrentAgentModelUI();
   refreshComposerState();
   console.log('App initialized');
+}
+
+async function syncAppVersion() {
+  try {
+    const version = await getVersion();
+    appVersionEl.textContent = `v${version}`;
+  } catch (error) {
+    console.error('Load app version failed:', error);
+    appVersionEl.textContent = 'v--';
+  }
 }
 
 function setSendButtonMode(mode: 'send' | 'stop', disabled: boolean) {
@@ -554,6 +567,11 @@ function applyAcpSessionBinding(agentId: string, acpSessionId: string) {
     targetSession = sessionList.find((item) => item.acpSessionId === normalizedSessionId) || null;
   }
   if (!targetSession) {
+    return;
+  }
+
+  // iFlow 历史会话的 sessionId 绑定到磁盘日志文件名，不应被运行时 ACP session 覆盖。
+  if (targetSession.source === 'iflow-log') {
     return;
   }
 
@@ -1012,8 +1030,8 @@ function setupEventListeners() {
     toolCallsPanelEl.classList.add('hidden');
   });
 
-  clearAllAgentsBtnEl.addEventListener('click', () => {
-    void clearAllAgents();
+  clearAllSessionsBtnEl.addEventListener('click', () => {
+    void clearCurrentAgentSessions();
   });
 }
 
@@ -1321,6 +1339,17 @@ function createArtifactPreviewTimeoutPromise(): Promise<never> {
   });
 }
 
+function shouldIgnoreArtifactResponse(requestToken: number, expectedPath: string): boolean {
+  if (artifactPreviewRequestToken === requestToken) {
+    return false;
+  }
+  if (artifactPreviewModalEl.classList.contains('hidden')) {
+    return true;
+  }
+  const currentPath = artifactPreviewPathEl.textContent?.trim() || '';
+  return currentPath !== expectedPath;
+}
+
 function clearArtifactPreviewCacheForAgent(agentId: string) {
   const prefix = `${agentId}::`;
   for (const key of Array.from(artifactPreviewCacheByKey.keys())) {
@@ -1392,7 +1421,7 @@ async function openArtifactPreview(path: string) {
   const requestToken = artifactPreviewRequestToken + 1;
   artifactPreviewRequestToken = requestToken;
   const hardTimeoutId = window.setTimeout(() => {
-    if (artifactPreviewRequestToken !== requestToken) {
+    if (shouldIgnoreArtifactResponse(requestToken, normalizedPath)) {
       return;
     }
     if (artifactPreviewLastKey === cacheKey) {
@@ -1418,13 +1447,14 @@ async function openArtifactPreview(path: string) {
       createArtifactPreviewTimeoutPromise(),
     ]);
 
-    if (artifactPreviewRequestToken !== requestToken) {
+    if (shouldIgnoreArtifactResponse(requestToken, normalizedPath)) {
       return;
     }
 
     setArtifactPreviewCache(cacheKey, encodeArtifactPreviewCacheEntry('html', html));
     artifactPreviewLastKey = cacheKey;
     applyArtifactPreviewContent('html', html);
+    return;
   } catch (error) {
     readError = error;
   }
@@ -1438,7 +1468,7 @@ async function openArtifactPreview(path: string) {
       createArtifactPreviewTimeoutPromise(),
     ]);
 
-    if (artifactPreviewRequestToken !== requestToken) {
+    if (shouldIgnoreArtifactResponse(requestToken, normalizedPath)) {
       return;
     }
 
@@ -1447,7 +1477,7 @@ async function openArtifactPreview(path: string) {
     artifactPreviewLastKey = cacheKey;
     applyArtifactPreviewContent('url', assetUrl);
   } catch (resolveError) {
-    if (artifactPreviewRequestToken !== requestToken) {
+    if (shouldIgnoreArtifactResponse(requestToken, normalizedPath)) {
       return;
     }
     if (!readError) {
@@ -1750,52 +1780,53 @@ function onSessionListClick(event: MouseEvent) {
   selectSession(sessionItem.dataset.sessionId);
 }
 
-async function clearAllAgents() {
-  if (!confirm('确定要删除所有 Agent 吗？')) {
+async function clearCurrentAgentSessions() {
+  if (!currentAgentId) {
+    showError('请先选择一个 Agent');
+    return;
+  }
+  const agent = agents.find((item) => item.id === currentAgentId);
+  if (!agent) {
+    showError('当前 Agent 不存在');
+    return;
+  }
+  if (!confirm(`确定要清除当前 Agent（${agent.workspacePath}）的所有会话记录吗？`)) {
     return;
   }
 
-  for (const agent of agents) {
-    if (agent.status !== 'connected') {
-      continue;
-    }
-    try {
-      await invoke('disconnect_agent', { agentId: agent.id });
-    } catch (e) {
-      console.error('断开连接失败:', e);
-    }
+  try {
+    await invoke<number>('clear_iflow_history_sessions', {
+      workspacePath: agent.workspacePath,
+    });
+  } catch (error) {
+    console.error('Clear iFlow history sessions error:', error);
+    showError(`清除磁盘历史记录失败: ${String(error)}`);
+    return;
   }
 
-  agents = [];
-  currentAgentId = null;
+  const removedSessions = sessionsByAgent[currentAgentId] || [];
+  for (const session of removedSessions) {
+    delete messagesBySession[session.id];
+  }
+  sessionsByAgent[currentAgentId] = [];
   currentSessionId = null;
   messages = [];
-  sessionsByAgent = {};
-  messagesBySession = {};
-  inflightSessionByAgent = {};
-  registryByAgent = {};
-  toolCallsByAgent = {};
-  modelOptionsCacheByAgent = {};
-  modelSwitchingAgentId = null;
-  artifactPreviewCacheByKey = new Map<string, string>();
-  artifactPreviewCacheOrder = [];
-  artifactPreviewLastKey = null;
+  delete inflightSessionByAgent[currentAgentId];
+  clearArtifactPreviewCacheForAgent(currentAgentId);
   closeArtifactPreviewModal();
-  hideSlashCommandMenu();
-  closeCurrentAgentModelMenu();
 
-  await saveAgents();
+  ensureAgentHasSessions(currentAgentId);
+  const nextSessions = getSessionsForAgent(currentAgentId);
+  if (nextSessions.length > 0) {
+    currentSessionId = nextSessions[0].id;
+    messages = getMessagesForSession(currentSessionId);
+  }
+
   await saveSessions();
   await saveSessionMessages();
 
-  renderAgentList();
   renderSessionList();
   renderMessages();
-  toolCallsPanelEl.classList.add('hidden');
-  currentAgentNameEl.textContent = '选择一个 Agent';
-  updateAgentStatusUI('disconnected');
-  updateCurrentAgentModelUI();
-  updateConnectionStatus(false);
   refreshComposerState();
 }
 
@@ -1973,7 +2004,10 @@ async function syncIflowHistorySessions(agent: Agent): Promise<void> {
         (item) => item.acpSessionId === acpSessionId || item.id === expectedHistorySessionId
       );
       if (existing) {
-        if (!existing.acpSessionId) {
+        if (
+          !existing.acpSessionId ||
+          (existing.source === 'iflow-log' && !isIflowHistorySessionId(existing.acpSessionId))
+        ) {
           existing.acpSessionId = acpSessionId;
           changed = true;
         }
@@ -2040,7 +2074,33 @@ async function syncIflowHistorySessions(agent: Agent): Promise<void> {
 }
 
 async function loadIflowHistoryMessagesForSession(session: Session): Promise<void> {
-  if (!session.acpSessionId) {
+  let effectiveSessionId = session.acpSessionId?.trim() || '';
+  if (!isIflowHistorySessionId(effectiveSessionId)) {
+    const inferred = inferLegacyHistorySessionId(session.agentId, session.id);
+    if (inferred && isIflowHistorySessionId(inferred)) {
+      effectiveSessionId = inferred;
+      if (session.acpSessionId !== inferred) {
+        session.acpSessionId = inferred;
+        void saveSessions();
+        if (currentAgentId === session.agentId) {
+          renderSessionList();
+        }
+      }
+    }
+  }
+  if (!isIflowHistorySessionId(effectiveSessionId)) {
+    if (currentSessionId === session.id) {
+      messages = [
+        {
+          id: `msg-${Date.now()}-history-invalid-session-id`,
+          role: 'system',
+          content: '该历史会话缺少有效的 sessionId，无法加载历史内容',
+          timestamp: new Date(),
+        },
+      ];
+      renderMessages();
+      refreshComposerState();
+    }
     return;
   }
   const agent = agents.find((item) => item.id === session.agentId);
@@ -2051,7 +2111,7 @@ async function loadIflowHistoryMessagesForSession(session: Session): Promise<voi
   try {
     const rawMessages = await invoke<IflowHistoryMessageRecord[]>('load_iflow_history_messages', {
       workspacePath: agent.workspacePath,
-      sessionId: session.acpSessionId,
+      sessionId: effectiveSessionId,
     });
 
     const normalized: Message[] = (Array.isArray(rawMessages) ? rawMessages : [])
@@ -2076,7 +2136,18 @@ async function loadIflowHistoryMessagesForSession(session: Session): Promise<voi
   } catch (error) {
     console.error('Load iFlow history messages error:', error);
     if (currentSessionId === session.id) {
-      showError(`加载历史会话失败: ${String(error)}`);
+      const detail = String(error);
+      messages = [
+        {
+          id: `msg-${Date.now()}-history-load-failed`,
+          role: 'system',
+          content: `加载历史会话失败：${detail}`,
+          timestamp: new Date(),
+        },
+      ];
+      renderMessages();
+      refreshComposerState();
+      showError(`加载历史会话失败: ${detail}`);
     }
   }
 }
@@ -2298,6 +2369,10 @@ async function deleteSession(sessionId: string) {
   if (!currentAgentId) {
     return;
   }
+  const agent = agents.find((item) => item.id === currentAgentId);
+  if (!agent) {
+    return;
+  }
 
   if (inflightSessionByAgent[currentAgentId] === sessionId) {
     showError('该会话正在回复中，暂时无法删除');
@@ -2305,8 +2380,30 @@ async function deleteSession(sessionId: string) {
   }
 
   const currentSessions = sessionsByAgent[currentAgentId] || [];
-  if (!currentSessions.some((session) => session.id === sessionId)) {
+  const targetSession = currentSessions.find((session) => session.id === sessionId);
+  if (!targetSession) {
     return;
+  }
+  if (targetSession.source === 'iflow-log' && !targetSession.acpSessionId) {
+    showError('历史会话缺少 sessionId，无法删除磁盘记录');
+    return;
+  }
+
+  if (targetSession.acpSessionId) {
+    try {
+      const deleted = await invoke<boolean>('delete_iflow_history_session', {
+        workspacePath: agent.workspacePath,
+        sessionId: targetSession.acpSessionId,
+      });
+      if (targetSession.source === 'iflow-log' && !deleted) {
+        showError('未找到对应历史会话文件，未执行删除');
+        return;
+      }
+    } catch (error) {
+      console.error('Delete iFlow history session error:', error);
+      showError(`删除磁盘历史记录失败: ${String(error)}`);
+      return;
+    }
   }
 
   sessionsByAgent[currentAgentId] = currentSessions.filter((session) => session.id !== sessionId);
@@ -3497,15 +3594,26 @@ function inferLegacyHistorySessionId(agentId: string, sessionId: string): string
   return candidate;
 }
 
+function isIflowHistorySessionId(sessionId: string | undefined): boolean {
+  return Boolean(sessionId && sessionId.trim().startsWith('session-'));
+}
+
 function parseStoredSession(session: StoredSession): Session {
   const normalizedTitle =
     typeof session.title === 'string' && session.title.trim().length > 0
       ? session.title
       : '新会话';
-  const normalizedAcpSessionId =
+  const rawAcpSessionId =
     typeof session.acpSessionId === 'string' && session.acpSessionId.trim().length > 0
       ? session.acpSessionId.trim()
-      : inferLegacyHistorySessionId(session.agentId, session.id) || undefined;
+      : undefined;
+  const inferredAcpSessionId = inferLegacyHistorySessionId(session.agentId, session.id) || undefined;
+  const normalizedAcpSessionId =
+    session.source === 'iflow-log'
+      ? isIflowHistorySessionId(rawAcpSessionId)
+        ? rawAcpSessionId
+        : inferredAcpSessionId
+      : rawAcpSessionId || inferredAcpSessionId;
   const normalizedSource =
     session.source === 'iflow-log'
       ? 'iflow-log'

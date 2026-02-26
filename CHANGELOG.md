@@ -8,6 +8,12 @@
 
 ## [Unreleased]
 
+### Changed
+
+- 暂无（下一个版本迭代中）
+
+## [0.2.0] - 2026-02-26
+
 ### Added
 
 - 顶部工具栏新增模型选择器，支持显示当前模型、展开模型列表、点击切换模型。
@@ -23,6 +29,8 @@
 - 新增 HTML Artifact 预览能力：
   - 自动从消息/工具输出中识别 `.html/.htm` 路径并显示“预览 HTML”按钮；
   - 点击后通过弹窗内 `iframe` 直接预览生成的 HTML 文件。
+- 左侧底部新增版本号展示（`vX.Y.Z`）。
+- 新增“清除当前 Agent 会话”能力：可删除当前 Agent 对应路径下的 iFlow 历史会话文件。
 
 ### Changed
 
@@ -40,19 +48,13 @@
 - HTML Artifact 预览性能优化：
   - 预热预览容器，降低首次打开卡顿感；
   - 引入基于 `Agent + 文件路径` 的内存缓存，重复打开同一文件更快；
-  - 关闭预览时保留已渲染内容，减少重复解析成本。
   - 后端 HTML 读取链路改为 `tokio::fs` 异步 I/O，降低阻塞风险。
 - ACP 消息发送链路支持会话绑定：
   - `send_message` 支持传入 `sessionId`；
-  - listener 在发送 prompt 前会根据目标 `sessionId` 执行 `session/load`，实现按会话继续对话。
-  - 当 `session/load` 失败时，会自动回退到 `session/new(sessionId=...)` 新建目标会话。
-- 本地新建会话会自动生成并绑定 `acpSessionId`，确保不同会话可在 ACP 侧独立延续。
+  - listener 在发送 prompt 前会根据目标 `sessionId` 执行 `session/load`，失败时回退 `session/new(sessionId=...)`。
 - 会话存储结构升级为“轻量索引”：
   - Session 新增 `acpSessionId/source`；
   - `source=iflow-log` 的消息正文不再写入本地快照，避免与 iFlow 日志重复存储。
-- iFlow 历史会话归属增强：
-  - 历史会话读取支持 workspace 原始路径与 canonical 路径双 key 候选目录；
-  - 解析 `session-*.jsonl` 时按记录内 `cwd` 严格匹配当前 Agent 目录，避免跨目录串会话。
 
 ### Fixed
 
@@ -69,8 +71,14 @@
 - 修复历史内容渲染污染问题：
   - 后端历史解析只提取文本条目，过滤 `tool_use/tool_result` 等中间日志；
   - 前端识别 `<Think>...</Think>` 并转换为“思考”消息，避免标签原样显示与 Markdown 被打断。
-- 修复 HTML 预览“持续加载不结束”问题：前端读取增加超时兜底并显示错误，占位状态不再无限等待；后端补充读取耗时日志便于定位慢点。
-- 优化 HTML 预览加载策略：前端优先使用 `resolve_html_artifact_path + convertFileSrc` 直接按文件 URL 预览（更好支持相对资源），失败时再回退 `srcdoc` 渲染。
+- 修复 HTML 预览“持续加载不结束/白屏”问题：
+  - 增加超时兜底并显示错误，不再无限等待；
+  - 路径提取增强（支持 JSON 片段、绝对路径、中文文件名与中文标点清洗）；
+  - 优先使用 `srcdoc` 展示，避免 URL 覆盖导致的空白。
+- 修复 iFlow 历史会话 `acpSessionId` 被运行时会话覆盖导致“卡在正在加载历史内容”的问题：
+  - `iflow-log` 会话不再被 ACP 绑定覆盖；
+  - 已污染会话可自动回退到 `session-...` 文件 ID。
+- 修复会话删除仅前端隐藏的问题：删除单条会话与批量清理当前 Agent 会话都会真实删除磁盘 `session-*.jsonl`。
 
 ## [0.1.0] - 2026-02-25
 

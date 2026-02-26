@@ -1,55 +1,64 @@
-# FlowHub
+# flow hub
 
-基于 Tauri 的多 Agent 桌面工作台 MVP，当前重点是 iFlow ACP 协议接入与对话可视化。
+基于 Tauri 2.0 的多 Agent 桌面工作台，当前重点是 iFlow ACP 协议接入、历史会话管理与可视化交互。
 
-## 当前状态
+当前版本：`v0.2.0`
 
-- 已完成 iFlow ACP 基础连接（WebSocket + JSON-RPC 会话）
-- 已支持消息发送、流式回复展示、工具调用展示、任务结束状态
-- 已支持 Agent 管理（新增、选择、删除、重连）与本地持久化（Agent 列表）
-- MVP 阶段，优先验证协议链路与交互闭环
+## 核心能力
+
+- iFlow Agent 管理：新增、重连、重命名、删除
+- 模型管理：显示当前模型、拉取模型列表、点击切换
+- 会话管理：多会话、会话标题、会话持久化
+- iFlow 历史导入：按 Agent 工作目录读取 `~/.iflow/projects/-<workspace-key>/session-*.jsonl`
+- 会话删除落盘：删除单条会话或清除当前 Agent 会话时，真实删除对应历史文件
+- 消息渲染：Markdown（含表格、代码块、链接、图片）与 `<Think>` 思考块
+- 工具调用面板：多条调用增量展示，状态与参数/输出可追踪
+- HTML Artifact 预览：识别 `.html/.htm` 路径并弹窗预览，支持中文文件名
+- 发送交互：发送按钮在生成中切换为停止按钮（ACP `session/cancel`）
+- 快捷回复：`继续`、`好的`、重试上一问
 
 ## 技术栈
 
 - Frontend: TypeScript + Vite
 - Desktop: Tauri 2.0
-- Backend: Rust (Tokio, tokio-tungstenite)
+- Backend: Rust + Tokio + tokio-tungstenite
 
 ## 目录结构
 
 ```text
 iflow-workspace/
-├── src/                 # 前端 TS 入口与样式
+├── src/                 # 前端 TS 与样式
 ├── src-tauri/           # Rust 后端与 Tauri 配置
-├── DEVELOPMENT_PLAN.md  # 需求与开发计划
-└── package.json         # 前端与 Tauri 脚本
+├── CHANGELOG.md
+├── README.md
+└── package.json
 ```
 
 ## 本地开发
 
-### 前提安装
+### 前置条件
 
-- 先安装 iFlow CLI：`https://cli.iflow.cn/`
-- 确保终端可直接执行 `iflow --help`
+- 安装 iFlow CLI：`https://cli.iflow.cn/`
+- 确保可执行：`iflow --help`
 
-### 1) 安装依赖
+### 安装依赖
 
 ```bash
 npm install
 ```
 
-### 2) 启动前端（仅 UI）
-
-```bash
-npm run dev
-```
-
-默认地址：`http://localhost:1420`
-
-### 3) 启动完整桌面应用（推荐）
+### 启动（推荐）
 
 ```bash
 npm run tauri:dev
+```
+
+默认前端地址：`http://localhost:1420`
+
+### 仅启动前端
+
+```bash
+npm run dev
 ```
 
 ## 构建
@@ -59,20 +68,9 @@ npm run build
 npm run tauri:build
 ```
 
-## 测试与检查
+## 检查
 
 ```bash
 cd src-tauri
 cargo check
-cargo test
 ```
-
-## MVP 已知边界
-
-- 目前主要适配 iFlow，其他 Agent 类型尚未接入
-- 会话历史持久化与多标签会话仍在后续计划中
-- 工具调用展示已可用，但仍有可视化优化空间
-
-## 规划参考
-
-详细规划见：`DEVELOPMENT_PLAN.md`

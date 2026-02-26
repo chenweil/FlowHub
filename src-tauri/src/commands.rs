@@ -808,13 +808,7 @@ pub async fn load_iflow_history_messages(
     workspace_path: String,
     session_id: String,
 ) -> Result<Vec<IflowHistoryMessage>, String> {
-    let normalized_session_id = session_id.trim().trim_end_matches(".jsonl").to_string();
-    if normalized_session_id.is_empty() {
-        return Err("session_id cannot be empty".to_string());
-    }
-    if !normalized_session_id.starts_with("session-") {
-        return Err("Invalid session_id format".to_string());
-    }
+    let normalized_session_id = normalize_iflow_session_id(&session_id)?;
 
     let normalized_workspace = match tokio::fs::canonicalize(&workspace_path).await {
         Ok(path) => normalize_workspace_path(&path.to_string_lossy()),
@@ -845,6 +839,88 @@ pub async fn load_iflow_history_messages(
         "Session file not found for {} under workspace {}",
         normalized_session_id, normalized_workspace
     ))
+}
+
+fn normalize_iflow_session_id(session_id: &str) -> Result<String, String> {
+    let normalized_session_id = session_id.trim().trim_end_matches(".jsonl").to_string();
+    if normalized_session_id.is_empty() {
+        return Err("session_id cannot be empty".to_string());
+    }
+    if !normalized_session_id.starts_with("session-") {
+        return Err("Invalid session_id format".to_string());
+    }
+    Ok(normalized_session_id)
+}
+
+#[tauri::command]
+pub async fn delete_iflow_history_session(
+    workspace_path: String,
+    session_id: String,
+) -> Result<bool, String> {
+    let normalized_session_id = normalize_iflow_session_id(&session_id)?;
+    let normalized_workspace = match tokio::fs::canonicalize(&workspace_path).await {
+        Ok(path) => normalize_workspace_path(&path.to_string_lossy()),
+        Err(_) => normalize_workspace_path(&workspace_path),
+    };
+    let candidate_dirs = iflow_project_dirs_for_workspace(&workspace_path, &normalized_workspace)?;
+
+    for project_dir in candidate_dirs {
+        let file_path = project_dir.join(format!("{}.jsonl", normalized_session_id));
+        match tokio::fs::remove_file(&file_path).await {
+            Ok(_) => return Ok(true),
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(format!("Failed to delete {}: {}", file_path.display(), error));
+            }
+        }
+    }
+
+    Ok(false)
+}
+
+#[tauri::command]
+pub async fn clear_iflow_history_sessions(workspace_path: String) -> Result<usize, String> {
+    let normalized_workspace = match tokio::fs::canonicalize(&workspace_path).await {
+        Ok(path) => normalize_workspace_path(&path.to_string_lossy()),
+        Err(_) => normalize_workspace_path(&workspace_path),
+    };
+    let candidate_dirs = iflow_project_dirs_for_workspace(&workspace_path, &normalized_workspace)?;
+
+    let mut deleted_files = 0_usize;
+
+    for project_dir in candidate_dirs {
+        let mut reader = match tokio::fs::read_dir(&project_dir).await {
+            Ok(reader) => reader,
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(format!(
+                    "Failed to open iFlow project dir {}: {}",
+                    project_dir.display(),
+                    error
+                ))
+            }
+        };
+
+        while let Some(entry) = reader
+            .next_entry()
+            .await
+            .map_err(|e| format!("Failed to read iFlow project entry: {}", e))?
+        {
+            let file_name = entry.file_name();
+            let file_name = file_name.to_string_lossy();
+            if !file_name.starts_with("session-") || !file_name.ends_with(".jsonl") {
+                continue;
+            }
+
+            let path = entry.path();
+            tokio::fs::remove_file(&path)
+                .await
+                .map_err(|e| format!("Failed to delete {}: {}", path.display(), e))?;
+            deleted_files += 1;
+        }
+    }
+
+    Ok(deleted_files)
 }
 
 async fn resolve_html_artifact_path_in_workspace(

@@ -10,7 +10,8 @@ mod state;
 mod storage;
 
 use commands::{
-    connect_iflow, disconnect_agent, list_available_models, list_iflow_history_sessions,
+    clear_iflow_history_sessions, connect_iflow, delete_iflow_history_session, disconnect_agent,
+    list_available_models, list_iflow_history_sessions,
     load_iflow_history_messages, read_html_artifact, resolve_html_artifact_path, send_message, stop_message,
     switch_agent_model,
 };
@@ -28,6 +29,8 @@ fn main() {
             list_available_models,
             list_iflow_history_sessions,
             load_iflow_history_messages,
+            delete_iflow_history_session,
+            clear_iflow_history_sessions,
             resolve_html_artifact_path,
             read_html_artifact,
             disconnect_agent,
