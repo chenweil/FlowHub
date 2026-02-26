@@ -501,11 +501,98 @@ fn extract_text_value(value: &Value) -> Option<String> {
     }
 }
 
-fn extract_history_message_content(record: &Value) -> Option<String> {
+fn extract_text_entries_only(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => {
+            let normalized = text.trim();
+            if normalized.is_empty() {
+                None
+            } else {
+                Some(normalized.to_string())
+            }
+        }
+        Value::Array(items) => {
+            let mut parts = Vec::new();
+            for item in items {
+                let Some(item_map) = item.as_object() else {
+                    continue;
+                };
+                let Some(item_type) = item_map.get("type").and_then(Value::as_str) else {
+                    continue;
+                };
+                if item_type != "text" {
+                    continue;
+                }
+                if let Some(text) = item_map.get("text").and_then(extract_text_value) {
+                    parts.push(text);
+                }
+            }
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join("\n"))
+            }
+        }
+        Value::Object(map) => {
+            if let Some(item_type) = map.get("type").and_then(Value::as_str) {
+                if item_type != "text" {
+                    return None;
+                }
+                return map.get("text").and_then(extract_text_value);
+            }
+
+            if let Some(text) = map.get("text").and_then(extract_text_value) {
+                return Some(text);
+            }
+
+            map.get("content").and_then(extract_text_entries_only)
+        }
+        _ => None,
+    }
+}
+
+fn has_structured_tool_entries(value: &Value) -> bool {
+    let Value::Array(items) = value else {
+        return false;
+    };
+
+    items.iter().any(|item| {
+        item.as_object()
+            .and_then(|map| map.get("type"))
+            .and_then(Value::as_str)
+            .map(|kind| kind == "tool_use" || kind == "tool_result")
+            .unwrap_or(false)
+    })
+}
+
+fn extract_history_message_content(record: &Value, record_type: &str) -> Option<String> {
+    let content = record.get("message").and_then(|message| message.get("content"))?;
+
+    if has_structured_tool_entries(content) {
+        // 过滤工具编排中间日志，避免污染历史回复与 Markdown 渲染。
+        return None;
+    }
+
+    // 仅提取文本片段，忽略 tool_use/tool_result 等结构化条目。
+    let text_only = extract_text_entries_only(content)?;
+    if text_only.trim().is_empty() {
+        return None;
+    }
+
+    // 对 user/assistant 之外的类型不展示（理论上外层已过滤，这里兜底）。
+    if record_type != "user" && record_type != "assistant" {
+        return None;
+    }
+
+    Some(text_only)
+}
+
+fn extract_history_timestamp(record: &Value) -> Option<String> {
     record
-        .get("message")
-        .and_then(|message| message.get("content"))
-        .and_then(extract_text_value)
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
 }
 
 fn extract_history_record_cwd(record: &Value) -> Option<String> {
@@ -559,14 +646,13 @@ async fn parse_iflow_history_summary(
             }
         }
 
+        let Some(content) = extract_history_message_content(&record, record_type) else {
+            continue;
+        };
+
         message_count += 1;
 
-        if let Some(ts) = record
-            .get("timestamp")
-            .and_then(Value::as_str)
-            .map(|item| item.trim().to_string())
-            .filter(|item| !item.is_empty())
-        {
+        if let Some(ts) = extract_history_timestamp(&record) {
             if created_at.is_none() {
                 created_at = Some(ts.clone());
             }
@@ -574,7 +660,7 @@ async fn parse_iflow_history_summary(
         }
 
         if title.is_none() && record_type == "user" {
-            title = extract_history_message_content(&record);
+            title = Some(content);
         }
     }
 
@@ -633,19 +719,11 @@ async fn parse_iflow_history_messages(
             }
         }
 
-        let Some(content) = extract_history_message_content(&record) else {
+        let Some(content) = extract_history_message_content(&record, record_type) else {
             continue;
         };
-        if content.trim().is_empty() {
-            continue;
-        }
 
-        let timestamp = record
-            .get("timestamp")
-            .and_then(Value::as_str)
-            .map(|item| item.trim().to_string())
-            .filter(|item| !item.is_empty())
-            .unwrap_or_else(|| Utc::now().to_rfc3339());
+        let timestamp = extract_history_timestamp(&record).unwrap_or_else(|| Utc::now().to_rfc3339());
 
         let id = record
             .get("uuid")

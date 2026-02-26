@@ -13,6 +13,17 @@ const addAgentModalEl = document.getElementById('add-agent-modal') as HTMLDivEle
 const closeModalBtnEl = document.getElementById('close-modal') as HTMLButtonElement;
 const cancelAddAgentBtnEl = document.getElementById('cancel-add-agent') as HTMLButtonElement;
 const confirmAddAgentBtnEl = document.getElementById('confirm-add-agent') as HTMLButtonElement;
+const renameAgentModalEl = document.getElementById('rename-agent-modal') as HTMLDivElement;
+const closeRenameAgentModalBtnEl = document.getElementById(
+  'close-rename-agent-modal'
+) as HTMLButtonElement;
+const cancelRenameAgentBtnEl = document.getElementById(
+  'cancel-rename-agent'
+) as HTMLButtonElement;
+const confirmRenameAgentBtnEl = document.getElementById(
+  'confirm-rename-agent'
+) as HTMLButtonElement;
+const renameAgentNameInputEl = document.getElementById('rename-agent-name') as HTMLInputElement;
 const currentAgentNameEl = document.getElementById('current-agent-name') as HTMLHeadingElement;
 const currentAgentStatusEl = document.getElementById('current-agent-status') as HTMLSpanElement;
 const currentAgentModelBtnEl = document.getElementById('current-agent-model-btn') as HTMLButtonElement;
@@ -52,6 +63,7 @@ interface Session {
   updatedAt: Date;
   acpSessionId?: string;
   source?: 'local' | 'iflow-log';
+  messageCountHint?: number;
 }
 
 interface Message {
@@ -110,6 +122,7 @@ interface StoredSession {
   updatedAt: string;
   acpSessionId?: string;
   source?: 'local' | 'iflow-log';
+  messageCountHint?: number;
 }
 
 interface StoredMessage {
@@ -165,6 +178,7 @@ let artifactPreviewRequestToken = 0;
 let artifactPreviewCacheByKey = new Map<string, string>();
 let artifactPreviewCacheOrder: string[] = [];
 let artifactPreviewLastKey: string | null = null;
+let renamingAgentId: string | null = null;
 
 type ComposerState = 'ready' | 'busy' | 'disabled';
 type StreamMessageType = 'content' | 'thought' | 'system' | 'plan';
@@ -875,8 +889,15 @@ function setupEventListeners() {
     }
   });
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && !artifactPreviewModalEl.classList.contains('hidden')) {
+    if (event.key !== 'Escape') {
+      return;
+    }
+    if (!artifactPreviewModalEl.classList.contains('hidden')) {
       closeArtifactPreviewModal();
+      return;
+    }
+    if (!renameAgentModalEl.classList.contains('hidden')) {
+      hideRenameAgentModal();
     }
   });
 
@@ -894,6 +915,28 @@ function setupEventListeners() {
 
     nameInput.value = 'iFlow';
     pathInput.value = '';
+  });
+
+  closeRenameAgentModalBtnEl.addEventListener('click', hideRenameAgentModal);
+  cancelRenameAgentBtnEl.addEventListener('click', hideRenameAgentModal);
+  renameAgentModalEl.addEventListener('click', (event) => {
+    if (event.target === renameAgentModalEl) {
+      hideRenameAgentModal();
+    }
+  });
+  confirmRenameAgentBtnEl.addEventListener('click', () => {
+    void submitRenameAgent();
+  });
+  renameAgentNameInputEl.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      void submitRenameAgent();
+      return;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      hideRenameAgentModal();
+    }
   });
 
   messageInputEl.addEventListener('keydown', (e) => {
@@ -1512,6 +1555,10 @@ function onAgentListClick(event: MouseEvent) {
       void deleteAgent(agentId);
       return;
     }
+    if (action === 'rename') {
+      void renameAgent(agentId);
+      return;
+    }
     if (action === 'reconnect') {
       void reconnectAgent(agentId);
       return;
@@ -1654,8 +1701,92 @@ function parseDateOrNow(raw: string | Date): Date {
   return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
 }
 
+function splitThinkTaggedContent(rawContent: string): { thoughts: string[]; answer: string } {
+  const thoughts: string[] = [];
+  const thinkTagPattern = /<\s*think\s*>([\s\S]*?)<\s*\/\s*think\s*>/gi;
+
+  const answer = rawContent
+    .replace(thinkTagPattern, (_full, thinkPart: string) => {
+      const thought = String(thinkPart || '').trim();
+      if (thought) {
+        thoughts.push(thought);
+      }
+      return '\n';
+    })
+    .trim();
+
+  return { thoughts, answer };
+}
+
+function expandIflowHistoryMessageRecord(item: IflowHistoryMessageRecord): Message[] {
+  const baseTimestamp = parseDateOrNow(item.timestamp);
+  const baseId = String(item.id || '').trim() || `history-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const content = String(item.content || '').trim();
+  if (!content) {
+    return [];
+  }
+
+  if (item.role === 'user') {
+    return [
+      {
+        id: baseId,
+        role: 'user',
+        content,
+        timestamp: baseTimestamp,
+      },
+    ];
+  }
+
+  const { thoughts, answer } = splitThinkTaggedContent(content);
+  const expanded: Message[] = thoughts.map((thought, index) => ({
+    id: `${baseId}-think-${index}`,
+    role: 'thought',
+    content: thought,
+    timestamp: baseTimestamp,
+  }));
+
+  if (answer) {
+    expanded.push({
+      id: baseId,
+      role: 'assistant',
+      content: answer,
+      timestamp: baseTimestamp,
+    });
+  } else if (expanded.length === 0) {
+    expanded.push({
+      id: baseId,
+      role: 'assistant',
+      content,
+      timestamp: baseTimestamp,
+    });
+  }
+
+  return expanded;
+}
+
 function buildHistorySessionLocalId(agentId: string, acpSessionId: string): string {
   return `iflowlog-${agentId}-${acpSessionId}`;
+}
+
+function dedupeSessionsByIdentity(sessionList: Session[]): Session[] {
+  const ordered = [...sessionList].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+  const deduped: Session[] = [];
+  const seen = new Set<string>();
+
+  for (const session of ordered) {
+    const acpKey =
+      typeof session.acpSessionId === 'string' && session.acpSessionId.trim().length > 0
+        ? `acp:${session.acpSessionId.trim()}`
+        : null;
+    const key = acpKey || `id:${session.id}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(session);
+  }
+
+  return deduped;
 }
 
 async function syncIflowHistorySessions(agent: Agent): Promise<void> {
@@ -1681,8 +1812,19 @@ async function syncIflowHistorySessions(agent: Agent): Promise<void> {
         continue;
       }
 
-      const existing = sessionList.find((item) => item.acpSessionId === acpSessionId);
+      const expectedHistorySessionId = buildHistorySessionLocalId(agent.id, acpSessionId);
+      const existing = sessionList.find(
+        (item) => item.acpSessionId === acpSessionId || item.id === expectedHistorySessionId
+      );
       if (existing) {
+        if (!existing.acpSessionId) {
+          existing.acpSessionId = acpSessionId;
+          changed = true;
+        }
+        if (existing.source !== 'iflow-log' && existing.id === expectedHistorySessionId) {
+          existing.source = 'iflow-log';
+          changed = true;
+        }
         const nextUpdatedAt = parseDateOrNow(history.updatedAt);
         if (nextUpdatedAt.getTime() > existing.updatedAt.getTime()) {
           existing.updatedAt = nextUpdatedAt;
@@ -1690,6 +1832,14 @@ async function syncIflowHistorySessions(agent: Agent): Promise<void> {
         }
         if (existing.source === 'iflow-log' && history.title && existing.title !== history.title) {
           existing.title = history.title;
+          changed = true;
+        }
+        if (
+          typeof history.messageCount === 'number' &&
+          history.messageCount >= 0 &&
+          existing.messageCountHint !== history.messageCount
+        ) {
+          existing.messageCountHint = history.messageCount;
           changed = true;
         }
         continue;
@@ -1703,16 +1853,27 @@ async function syncIflowHistorySessions(agent: Agent): Promise<void> {
         updatedAt: parseDateOrNow(history.updatedAt),
         acpSessionId,
         source: 'iflow-log',
+        messageCountHint:
+          typeof history.messageCount === 'number' && history.messageCount >= 0
+            ? history.messageCount
+            : undefined,
       };
       sessionList.push(imported);
       changed = true;
+    }
+
+    const dedupedSessions = dedupeSessionsByIdentity(sessionList);
+    if (dedupedSessions.length !== sessionList.length) {
+      sessionsByAgent[agent.id] = dedupedSessions;
+      changed = true;
+    } else {
+      sessionsByAgent[agent.id] = sessionList;
     }
 
     if (!changed) {
       return;
     }
 
-    sessionsByAgent[agent.id] = sessionList;
     await saveSessions();
     if (currentAgentId === agent.id) {
       renderSessionList();
@@ -1738,18 +1899,15 @@ async function loadIflowHistoryMessagesForSession(session: Session): Promise<voi
     });
 
     const normalized: Message[] = (Array.isArray(rawMessages) ? rawMessages : [])
-      .map((item) => {
-        const role: Message['role'] = item.role === 'user' ? 'user' : 'assistant';
-        return {
-          id: item.id,
-          role,
-          content: item.content,
-          timestamp: parseDateOrNow(item.timestamp),
-        };
-      })
+      .flatMap((item) => expandIflowHistoryMessageRecord(item))
       .filter((item) => item.content.trim().length > 0);
 
     messagesBySession[session.id] = normalized;
+    if (session.source === 'iflow-log') {
+      session.messageCountHint = normalized.filter(
+        (item) => item.role === 'user' || item.role === 'assistant'
+      ).length;
+    }
 
     if (currentSessionId === session.id) {
       messages = normalized;
@@ -1870,6 +2028,59 @@ async function deleteAgent(agentId: string) {
   refreshComposerState();
 }
 
+async function renameAgent(agentId: string) {
+  const agent = agents.find((a) => a.id === agentId);
+  if (!agent) {
+    return;
+  }
+  renamingAgentId = agent.id;
+  renameAgentNameInputEl.value = agent.name;
+  renameAgentModalEl.classList.remove('hidden');
+  window.requestAnimationFrame(() => {
+    renameAgentNameInputEl.focus();
+    renameAgentNameInputEl.select();
+  });
+}
+
+function hideRenameAgentModal() {
+  renamingAgentId = null;
+  renameAgentModalEl.classList.add('hidden');
+}
+
+async function submitRenameAgent() {
+  if (!renamingAgentId) {
+    return;
+  }
+
+  const agent = agents.find((a) => a.id === renamingAgentId);
+  if (!agent) {
+    hideRenameAgentModal();
+    return;
+  }
+
+  const nextName = renameAgentNameInputEl.value.trim();
+  if (!nextName) {
+    showError('Agent 名称不能为空');
+    renameAgentNameInputEl.focus();
+    return;
+  }
+
+  const normalizedName = nextName.slice(0, 40);
+  if (normalizedName === agent.name) {
+    hideRenameAgentModal();
+    return;
+  }
+
+  agent.name = normalizedName;
+  await saveAgents();
+  if (currentAgentId === agent.id) {
+    currentAgentNameEl.textContent = agent.name;
+  }
+  renderAgentList();
+  hideRenameAgentModal();
+  showSuccess('Agent 名称已更新');
+}
+
 // 渲染 Agent 列表
 function renderAgentList() {
   agentListEl.innerHTML = agents
@@ -1884,6 +2095,7 @@ function renderAgentList() {
       </div>
       <div class="agent-actions">
         <div class="status-indicator ${agent.status}"></div>
+        <button class="btn-edit" data-action="rename" data-agent-id="${agent.id}" title="编辑名称">✎</button>
         ${
           agent.status === 'disconnected'
             ? `<button class="btn-reconnect" data-action="reconnect" data-agent-id="${agent.id}" title="重新连接">↻</button>`
@@ -1911,7 +2123,8 @@ function renderSessionList() {
 
   sessionListEl.innerHTML = sessionList
     .map((session) => {
-      const messageCount = (messagesBySession[session.id] || []).length;
+      const loadedCount = (messagesBySession[session.id] || []).length;
+      const messageCount = loadedCount > 0 ? loadedCount : session.messageCountHint || 0;
       return `
       <div class="session-item ${session.id === currentSessionId ? 'active' : ''}" data-session-id="${session.id}">
         <div class="session-row">
@@ -2648,7 +2861,7 @@ function renderMessages() {
     : '';
 
   if (messages.length === 0) {
-    const title = currentSessionId ? '当前会话暂无消息' : '👋 欢迎使用 iFlow Workspace';
+    const title = currentSessionId ? '当前会话暂无消息' : '👋 欢迎使用 flow hub';
     const hint = currentSessionId
       ? '开始输入消息，内容将保存在当前会话中。'
       : '从左侧选择一个 Agent 开始对话，或添加新的 Agent。';
@@ -3116,22 +3329,45 @@ function normalizeStoredRole(role: string): Message['role'] {
   return 'assistant';
 }
 
+function inferLegacyHistorySessionId(agentId: string, sessionId: string): string | null {
+  const prefix = `iflowlog-${agentId}-`;
+  if (!sessionId.startsWith(prefix)) {
+    return null;
+  }
+  const candidate = sessionId.slice(prefix.length).trim();
+  if (!candidate.startsWith('session-')) {
+    return null;
+  }
+  return candidate;
+}
+
 function parseStoredSession(session: StoredSession): Session {
   const normalizedTitle =
     typeof session.title === 'string' && session.title.trim().length > 0
       ? session.title
       : '新会话';
+  const normalizedAcpSessionId =
+    typeof session.acpSessionId === 'string' && session.acpSessionId.trim().length > 0
+      ? session.acpSessionId.trim()
+      : inferLegacyHistorySessionId(session.agentId, session.id) || undefined;
+  const normalizedSource =
+    session.source === 'iflow-log'
+      ? 'iflow-log'
+      : normalizedAcpSessionId && session.id === buildHistorySessionLocalId(session.agentId, normalizedAcpSessionId)
+        ? 'iflow-log'
+        : 'local';
 
   return {
     ...session,
     title: normalizedTitle,
     createdAt: new Date(session.createdAt),
     updatedAt: new Date(session.updatedAt),
-    acpSessionId:
-      typeof session.acpSessionId === 'string' && session.acpSessionId.trim().length > 0
-        ? session.acpSessionId.trim()
+    acpSessionId: normalizedAcpSessionId,
+    source: normalizedSource,
+    messageCountHint:
+      typeof session.messageCountHint === 'number' && session.messageCountHint >= 0
+        ? session.messageCountHint
         : undefined,
-    source: session.source === 'iflow-log' ? 'iflow-log' : 'local',
   };
 }
 
@@ -3142,6 +3378,7 @@ function toStoredSession(session: Session): StoredSession {
     updatedAt: session.updatedAt.toISOString(),
     acpSessionId: session.acpSessionId,
     source: session.source || 'local',
+    messageCountHint: session.messageCountHint,
   };
 }
 
@@ -3208,7 +3445,8 @@ function normalizeStoredSessions(parsed: StoredSessionMap | null | undefined): R
     return normalized;
   }
   for (const [agentId, storedSessions] of Object.entries(parsed)) {
-    normalized[agentId] = Array.isArray(storedSessions) ? storedSessions.map(parseStoredSession) : [];
+    const parsedSessions = Array.isArray(storedSessions) ? storedSessions.map(parseStoredSession) : [];
+    normalized[agentId] = dedupeSessionsByIdentity(parsedSessions);
   }
   return normalized;
 }
@@ -3554,6 +3792,77 @@ function isMarkdownTableRow(line: string): boolean {
   return splitMarkdownTableRow(trimmed).length >= 2;
 }
 
+function normalizeMarkdownTableCells(rawCells: string[], columnCount: number): string[] {
+  const rowCells: string[] = [];
+  for (let col = 0; col < columnCount; col += 1) {
+    rowCells.push(rawCells[col] || '');
+  }
+  return rowCells;
+}
+
+function collectMarkdownTableBodyRows(
+  lines: string[],
+  startIndex: number,
+  columnCount: number
+): { rows: string[][]; nextIndex: number } {
+  const rows: string[][] = [];
+  let index = startIndex;
+  let pendingRow = '';
+
+  while (index < lines.length) {
+    const line = lines[index];
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      break;
+    }
+
+    const hasPipe = trimmed.includes('|');
+    if (!hasPipe) {
+      if (!pendingRow) {
+        break;
+      }
+      // 历史日志里表格行可能被软换行，拼回上一行。
+      pendingRow = `${pendingRow} ${trimmed}`.trim();
+      index += 1;
+    } else if (!pendingRow) {
+      pendingRow = trimmed.startsWith('|') ? trimmed : `| ${trimmed}`;
+      index += 1;
+    } else {
+      const pendingColumnCount = splitMarkdownTableRow(pendingRow).length;
+      const startsAsNewRow = trimmed.startsWith('|');
+      if (startsAsNewRow && pendingColumnCount >= columnCount) {
+        rows.push(normalizeMarkdownTableCells(splitMarkdownTableRow(pendingRow), columnCount));
+        pendingRow = trimmed;
+      } else {
+        const segment = startsAsNewRow ? trimmed.replace(/^\|/, '').trim() : trimmed;
+        pendingRow = `${pendingRow} ${segment}`.trim();
+      }
+      index += 1;
+    }
+
+    if (!pendingRow) {
+      continue;
+    }
+
+    const currentColumnCount = splitMarkdownTableRow(pendingRow).length;
+    const rowLooksComplete = currentColumnCount >= columnCount && pendingRow.endsWith('|');
+    if (rowLooksComplete) {
+      rows.push(normalizeMarkdownTableCells(splitMarkdownTableRow(pendingRow), columnCount));
+      pendingRow = '';
+    }
+  }
+
+  if (pendingRow) {
+    const rowCells = splitMarkdownTableRow(pendingRow);
+    if (rowCells.length >= 2) {
+      rows.push(normalizeMarkdownTableCells(rowCells, columnCount));
+    }
+  }
+
+  return { rows, nextIndex: index };
+}
+
 function renderMarkdownContent(text: string): string {
   const codeBlockTokens: string[] = [];
   const withPlaceholders = text.replace(/```([^\n`]*)\n?([\s\S]*?)```/g, (_match, lang, code) => {
@@ -3626,16 +3935,9 @@ function renderMarkdownContent(text: string): string {
       const columnCount = headerCells.length;
       index += 2;
 
-      const bodyRows: string[][] = [];
-      while (index < lines.length && isMarkdownTableRow(lines[index])) {
-        const rawCells = splitMarkdownTableRow(lines[index]);
-        const rowCells: string[] = [];
-        for (let col = 0; col < columnCount; col += 1) {
-          rowCells.push(rawCells[col] || '');
-        }
-        bodyRows.push(rowCells);
-        index += 1;
-      }
+      const tableBody = collectMarkdownTableBodyRows(lines, index, columnCount);
+      const bodyRows = tableBody.rows;
+      index = tableBody.nextIndex;
 
       const headerHtml = `<tr>${headerCells.map((cell) => `<th>${renderInlineMarkdown(cell)}</th>`).join('')}</tr>`;
       const bodyHtml = bodyRows

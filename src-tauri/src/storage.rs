@@ -16,6 +16,12 @@ pub struct StoredSession {
     pub title: String,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(default)]
+    pub acp_session_id: Option<String>,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub message_count_hint: Option<usize>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -139,6 +145,9 @@ mod tests {
                 title: "Session One".to_string(),
                 created_at: "2024-01-01T00:00:00.000Z".to_string(),
                 updated_at: "2024-01-01T00:10:00.000Z".to_string(),
+                acp_session_id: Some("session-1".to_string()),
+                source: Some("local".to_string()),
+                message_count_hint: Some(1),
             }],
         );
         snapshot.messages_by_session.insert(

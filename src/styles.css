@@ -89,6 +89,10 @@ body {
 .agent-item .agent-icon {
   width: 36px;
   height: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  flex: 0 0 36px;
+  box-sizing: border-box;
   border-radius: var(--radius-sm);
   background: linear-gradient(135deg, var(--accent-color), #a371f7);
   display: flex;
@@ -97,6 +101,9 @@ body {
   font-weight: bold;
   margin-right: 12px;
   font-size: 14px;
+  line-height: 1;
+  font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+  letter-spacing: 0.2px;
 }
 
 .agent-item .agent-info {
@@ -140,6 +147,33 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.agent-item .btn-edit {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(139, 148, 158, 0.16);
+  color: #8b949e;
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.8;
+  transition: all 0.2s;
+  padding: 0;
+  margin-left: 4px;
+  pointer-events: auto;
+  z-index: 10;
+  position: relative;
+}
+
+.agent-item .btn-edit:hover {
+  background: rgba(139, 148, 158, 0.32);
+  color: var(--text-primary);
+  opacity: 1;
 }
 
 .agent-item .btn-delete {

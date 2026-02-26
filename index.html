@@ -4,14 +4,14 @@
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="/src/styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>iFlow Workspace</title>
+    <title>flow hub</title>
   </head>
   <body>
     <div id="app">
       <!-- 侧边栏：Agent 列表 -->
       <aside class="sidebar">
         <div class="sidebar-header">
-          <h1>iFlow Workspace</h1>
+          <h1>flow hub</h1>
           <button id="add-agent-btn" class="btn-primary">+ 添加 Agent</button>
         </div>
         <div class="agent-list" id="agent-list">
@@ -63,7 +63,7 @@
         <div class="chat-container">
           <div id="chat-messages" class="chat-messages">
             <div class="welcome-message">
-              <h3>👋 欢迎使用 iFlow Workspace</h3>
+              <h3>👋 欢迎使用 flow hub</h3>
               <p>从左侧选择一个 Agent 开始对话，或添加新的 Agent。</p>
             </div>
           </div>
@@ -130,6 +130,26 @@
         <div class="modal-footer">
           <button id="cancel-add-agent" class="btn-secondary">取消</button>
           <button id="confirm-add-agent" class="btn-primary">连接</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 编辑 Agent 名称弹窗 -->
+    <div id="rename-agent-modal" class="modal hidden">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>编辑 Agent 名称</h3>
+          <button id="close-rename-agent-modal" class="btn-icon">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label for="rename-agent-name">Agent 名称</label>
+            <input type="text" id="rename-agent-name" placeholder="请输入 Agent 名称">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="cancel-rename-agent" class="btn-secondary">取消</button>
+          <button id="confirm-rename-agent" class="btn-primary">保存</button>
         </div>
       </div>
     </div>
