@@ -134,6 +134,22 @@
       </div>
     </div>
 
+    <!-- HTML Artifact 预览弹窗 -->
+    <div id="artifact-preview-modal" class="modal hidden">
+      <div class="modal-content artifact-preview-modal-content">
+        <div class="modal-header">
+          <h3>HTML 预览</h3>
+          <button id="close-artifact-preview" class="btn-icon">×</button>
+        </div>
+        <div class="modal-body artifact-preview-meta">
+          <div id="artifact-preview-path"></div>
+        </div>
+        <div class="artifact-preview-body">
+          <iframe id="artifact-preview-frame" class="artifact-preview-frame" sandbox=""></iframe>
+        </div>
+      </div>
+    </div>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

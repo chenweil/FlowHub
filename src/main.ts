@@ -27,6 +27,10 @@ const connectionStatusEl = document.getElementById('connection-status') as HTMLD
 const clearAllAgentsBtnEl = document.getElementById('clear-all-agents') as HTMLButtonElement;
 const inputStatusHintEl = document.getElementById('input-status-hint') as HTMLSpanElement;
 const slashCommandMenuEl = document.getElementById('slash-command-menu') as HTMLDivElement;
+const artifactPreviewModalEl = document.getElementById('artifact-preview-modal') as HTMLDivElement;
+const closeArtifactPreviewBtnEl = document.getElementById('close-artifact-preview') as HTMLButtonElement;
+const artifactPreviewPathEl = document.getElementById('artifact-preview-path') as HTMLDivElement;
+const artifactPreviewFrameEl = document.getElementById('artifact-preview-frame') as HTMLIFrameElement;
 
 // 类型定义
 interface Agent {
@@ -138,6 +142,10 @@ let modelSwitchingAgentId: string | null = null;
 let slashMenuItems: SlashMenuItem[] = [];
 let slashMenuVisible = false;
 let slashMenuActiveIndex = 0;
+let artifactPreviewRequestToken = 0;
+let artifactPreviewCacheByKey = new Map<string, string>();
+let artifactPreviewCacheOrder: string[] = [];
+let artifactPreviewLastKey: string | null = null;
 
 type ComposerState = 'ready' | 'busy' | 'disabled';
 type StreamMessageType = 'content' | 'thought' | 'system' | 'plan';
@@ -184,6 +192,8 @@ const TITLE_GENERIC_PHRASES = new Set<string>([
   'thanks',
 ]);
 const ASSISTANT_QUICK_REPLIES: ReadonlyArray<string> = ['继续', '好的'];
+const HTML_ARTIFACT_PATH_PATTERN = /\.html?$/i;
+const ARTIFACT_PREVIEW_CACHE_LIMIT = 8;
 
 // 初始化
 async function init() {
@@ -191,6 +201,7 @@ async function init() {
   await loadAgents();
   setupEventListeners();
   setupTauriEventListeners();
+  warmUpArtifactPreviewFrame();
   setSendButtonMode('send', true);
   updateCurrentAgentModelUI();
   refreshComposerState();
@@ -787,6 +798,17 @@ function setupEventListeners() {
 
   closeModalBtnEl.addEventListener('click', hideModal);
   cancelAddAgentBtnEl.addEventListener('click', hideModal);
+  closeArtifactPreviewBtnEl.addEventListener('click', closeArtifactPreviewModal);
+  artifactPreviewModalEl.addEventListener('click', (event) => {
+    if (event.target === artifactPreviewModalEl) {
+      closeArtifactPreviewModal();
+    }
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !artifactPreviewModalEl.classList.contains('hidden')) {
+      closeArtifactPreviewModal();
+    }
+  });
 
   confirmAddAgentBtnEl.addEventListener('click', async () => {
     const nameInput = document.getElementById('agent-name') as HTMLInputElement;
@@ -851,6 +873,7 @@ function setupEventListeners() {
     void sendMessage();
   });
   chatMessagesEl.addEventListener('click', onChatMessagesClick);
+  toolCallsListEl.addEventListener('click', onToolCallsClick);
   currentAgentModelBtnEl.addEventListener('click', (event) => {
     event.stopPropagation();
     void toggleCurrentAgentModelMenu();
@@ -930,8 +953,265 @@ async function retryUserMessageById(messageId: string) {
   await sendPresetMessage(userMessage.content, '当前无法重试，请等待回复完成或检查连接状态');
 }
 
+function stripArtifactPathPunctuation(token: string): string {
+  return token
+    .replace(/^[`"'([{<]+/, '')
+    .replace(/[`"')\]}>.,;:!?]+$/, '')
+    .trim();
+}
+
+function normalizeArtifactPathCandidate(raw: string): string | null {
+  let candidate = stripArtifactPathPunctuation(raw);
+  if (!candidate) {
+    return null;
+  }
+
+  candidate = candidate.replace(/^\[diff\]\s*/i, '').trim();
+  if (!candidate) {
+    return null;
+  }
+
+  if (!HTML_ARTIFACT_PATH_PATTERN.test(candidate)) {
+    return null;
+  }
+
+  if (/^https?:\/\//i.test(candidate)) {
+    return null;
+  }
+
+  return candidate;
+}
+
+function extractHtmlArtifactPaths(text: string): string[] {
+  if (!text.trim()) {
+    return [];
+  }
+
+  const unique = new Set<string>();
+  const addCandidate = (value: string) => {
+    const normalized = normalizeArtifactPathCandidate(value);
+    if (normalized) {
+      unique.add(normalized);
+    }
+  };
+
+  const markdownLinkPattern = /\[[^\]]+\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
+  let markdownMatch = markdownLinkPattern.exec(text);
+  while (markdownMatch) {
+    addCandidate(markdownMatch[1]);
+    markdownMatch = markdownLinkPattern.exec(text);
+  }
+
+  const tokens = text.split(/\s+/);
+  for (const token of tokens) {
+    addCandidate(token);
+  }
+
+  return Array.from(unique).slice(0, 6);
+}
+
+function artifactFileName(path: string): string {
+  const normalized = path.replace(/\\/g, '/');
+  const parts = normalized.split('/').filter(Boolean);
+  return parts.length > 0 ? parts[parts.length - 1] : path;
+}
+
+function renderArtifactPreviewActions(text: string): string {
+  const paths = extractHtmlArtifactPaths(text);
+  if (paths.length === 0) {
+    return '';
+  }
+
+  return `
+    <div class="artifact-actions">
+      ${paths
+        .map((path) => {
+          const encodedPath = encodeURIComponent(path);
+          const title = escapeHtml(path);
+          const fileName = escapeHtml(artifactFileName(path));
+          return `
+            <button
+              type="button"
+              class="artifact-preview-btn"
+              data-artifact-preview-path="${encodedPath}"
+              title="${title}"
+            >
+              预览 HTML · ${fileName}
+            </button>
+          `;
+        })
+        .join('')}
+    </div>
+  `;
+}
+
+function decodeArtifactPath(encodedPath: string): string | null {
+  try {
+    return decodeURIComponent(encodedPath);
+  } catch {
+    return null;
+  }
+}
+
+function renderArtifactPlaceholder(title: string, description: string): string {
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d1117; color: #e6edf3; display: grid; place-items: center; min-height: 100vh; }
+    .box { padding: 20px 24px; border: 1px solid #30363d; border-radius: 10px; background: #161b22; max-width: 680px; }
+    h1 { margin: 0 0 10px; font-size: 16px; }
+    p { margin: 0; color: #9ba7b4; line-height: 1.6; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>${escapeHtml(title)}</h1>
+    <p>${escapeHtml(description)}</p>
+  </div>
+</body>
+</html>`;
+}
+
+function buildArtifactPreviewCacheKey(agentId: string, normalizedPath: string): string {
+  return `${agentId}::${normalizedPath}`;
+}
+
+function touchArtifactCacheKey(key: string) {
+  const existingIndex = artifactPreviewCacheOrder.indexOf(key);
+  if (existingIndex >= 0) {
+    artifactPreviewCacheOrder.splice(existingIndex, 1);
+  }
+  artifactPreviewCacheOrder.push(key);
+}
+
+function setArtifactPreviewCache(key: string, html: string) {
+  artifactPreviewCacheByKey.set(key, html);
+  touchArtifactCacheKey(key);
+
+  while (artifactPreviewCacheOrder.length > ARTIFACT_PREVIEW_CACHE_LIMIT) {
+    const oldestKey = artifactPreviewCacheOrder.shift();
+    if (!oldestKey) {
+      continue;
+    }
+    artifactPreviewCacheByKey.delete(oldestKey);
+    if (artifactPreviewLastKey === oldestKey) {
+      artifactPreviewLastKey = null;
+    }
+  }
+}
+
+function getArtifactPreviewCache(key: string): string | null {
+  const html = artifactPreviewCacheByKey.get(key);
+  if (!html) {
+    return null;
+  }
+  touchArtifactCacheKey(key);
+  return html;
+}
+
+function clearArtifactPreviewCacheForAgent(agentId: string) {
+  const prefix = `${agentId}::`;
+  for (const key of Array.from(artifactPreviewCacheByKey.keys())) {
+    if (!key.startsWith(prefix)) {
+      continue;
+    }
+    artifactPreviewCacheByKey.delete(key);
+    artifactPreviewCacheOrder = artifactPreviewCacheOrder.filter((item) => item !== key);
+    if (artifactPreviewLastKey === key) {
+      artifactPreviewLastKey = null;
+    }
+  }
+}
+
+function warmUpArtifactPreviewFrame() {
+  if (artifactPreviewFrameEl.dataset.warmed === '1') {
+    return;
+  }
+  artifactPreviewFrameEl.srcdoc = renderArtifactPlaceholder('HTML 预览', '预览容器已就绪');
+  artifactPreviewFrameEl.dataset.warmed = '1';
+}
+
+function closeArtifactPreviewModal() {
+  artifactPreviewRequestToken += 1;
+  artifactPreviewModalEl.classList.add('hidden');
+  artifactPreviewPathEl.textContent = '';
+}
+
+async function openArtifactPreview(path: string) {
+  const agent = currentAgentId ? agents.find((item) => item.id === currentAgentId) : null;
+  if (!agent || agent.status !== 'connected') {
+    showError('请先连接当前 Agent，再预览 HTML Artifact');
+    return;
+  }
+
+  const normalizedPath = path.trim();
+  if (!normalizedPath) {
+    showError('无效的 Artifact 路径');
+    return;
+  }
+
+  const cacheKey = buildArtifactPreviewCacheKey(agent.id, normalizedPath);
+  artifactPreviewModalEl.classList.remove('hidden');
+  artifactPreviewPathEl.textContent = normalizedPath;
+
+  if (artifactPreviewLastKey === cacheKey) {
+    return;
+  }
+
+  const cachedHtml = getArtifactPreviewCache(cacheKey);
+  if (cachedHtml) {
+    artifactPreviewFrameEl.srcdoc = cachedHtml;
+    artifactPreviewLastKey = cacheKey;
+    return;
+  }
+
+  artifactPreviewFrameEl.srcdoc = renderArtifactPlaceholder(
+    '正在加载 HTML 预览',
+    '正在读取文件内容，请稍候...'
+  );
+
+  const requestToken = artifactPreviewRequestToken + 1;
+  artifactPreviewRequestToken = requestToken;
+
+  try {
+    const html = await invoke<string>('read_html_artifact', {
+      agentId: agent.id,
+      filePath: normalizedPath,
+    });
+
+    if (artifactPreviewRequestToken !== requestToken) {
+      return;
+    }
+    setArtifactPreviewCache(cacheKey, html);
+    artifactPreviewLastKey = cacheKey;
+    artifactPreviewFrameEl.srcdoc = html;
+  } catch (error) {
+    if (artifactPreviewRequestToken !== requestToken) {
+      return;
+    }
+    artifactPreviewLastKey = null;
+    artifactPreviewFrameEl.srcdoc = renderArtifactPlaceholder(
+      'HTML 预览失败',
+      `无法读取文件：${String(error)}`
+    );
+  }
+}
+
 function onChatMessagesClick(event: MouseEvent) {
   const target = event.target as HTMLElement;
+  const artifactBtn = target.closest('button[data-artifact-preview-path]') as HTMLButtonElement | null;
+  if (artifactBtn?.dataset.artifactPreviewPath) {
+    const path = decodeArtifactPath(artifactBtn.dataset.artifactPreviewPath);
+    if (path) {
+      event.preventDefault();
+      void openArtifactPreview(path);
+    }
+    return;
+  }
+
   const quickReplyBtn = target.closest('button[data-quick-reply]') as HTMLButtonElement | null;
   if (quickReplyBtn) {
     const reply = quickReplyBtn.dataset.quickReply;
@@ -956,6 +1236,22 @@ function onChatMessagesClick(event: MouseEvent) {
 
   event.preventDefault();
   void retryUserMessageById(retryMessageId);
+}
+
+function onToolCallsClick(event: MouseEvent) {
+  const target = event.target as HTMLElement;
+  const artifactBtn = target.closest('button[data-artifact-preview-path]') as HTMLButtonElement | null;
+  if (!artifactBtn?.dataset.artifactPreviewPath) {
+    return;
+  }
+
+  const path = decodeArtifactPath(artifactBtn.dataset.artifactPreviewPath);
+  if (!path) {
+    return;
+  }
+
+  event.preventDefault();
+  void openArtifactPreview(path);
 }
 
 function closeCurrentAgentModelMenu() {
@@ -1208,6 +1504,10 @@ async function clearAllAgents() {
   toolCallsByAgent = {};
   modelOptionsCacheByAgent = {};
   modelSwitchingAgentId = null;
+  artifactPreviewCacheByKey = new Map<string, string>();
+  artifactPreviewCacheOrder = [];
+  artifactPreviewLastKey = null;
+  closeArtifactPreviewModal();
   hideSlashCommandMenu();
   closeCurrentAgentModelMenu();
 
@@ -1279,6 +1579,9 @@ async function addAgent(name: string, iflowPath: string, workspacePath: string) 
 // 选择 Agent
 function selectAgent(agentId: string) {
   closeCurrentAgentModelMenu();
+  if (currentAgentId && currentAgentId !== agentId) {
+    closeArtifactPreviewModal();
+  }
   currentAgentId = agentId;
   const agent = agents.find((a) => a.id === agentId);
   if (!agent) {
@@ -1345,6 +1648,7 @@ async function deleteAgent(agentId: string) {
   delete registryByAgent[agentId];
   delete toolCallsByAgent[agentId];
   delete modelOptionsCacheByAgent[agentId];
+  clearArtifactPreviewCacheForAgent(agentId);
 
   const removedSessions = sessionsByAgent[agentId] || [];
   delete sessionsByAgent[agentId];
@@ -1354,6 +1658,7 @@ async function deleteAgent(agentId: string) {
 
   if (currentAgentId === agentId) {
     closeCurrentAgentModelMenu();
+    closeArtifactPreviewModal();
     currentAgentId = null;
     currentSessionId = null;
     messages = [];
@@ -2120,6 +2425,7 @@ function showToolCalls(toolCalls: ToolCall[]) {
           : ''
       }
       ${tc.output ? `<div class="tool-output">${formatMessageContent(tc.output)}</div>` : ''}
+      ${tc.output ? renderArtifactPreviewActions(tc.output) : ''}
     </div>
   `
     )
@@ -2241,6 +2547,7 @@ function renderMessages() {
         <div class="message-avatar">${avatar}</div>
         <div class="message-content">
           ${formatMessageContent(msg.content)}
+          ${renderArtifactPreviewActions(msg.content)}
           <div class="message-time">${formatTime(msg.timestamp)}</div>
           ${quickReplySection}
         </div>

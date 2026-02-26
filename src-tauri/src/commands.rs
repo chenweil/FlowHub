@@ -10,6 +10,8 @@ use crate::agents::iflow_adapter::{find_available_port, message_listener_task};
 use crate::models::{AgentInfo, AgentStatus, ConnectResponse, ListenerCommand, ModelOption};
 use crate::state::{AgentInstance, AppState};
 
+const MAX_HTML_ARTIFACT_SIZE: u64 = 2 * 1024 * 1024;
+
 async fn spawn_iflow_agent(
     app_handle: tauri::AppHandle,
     state: &AppState,
@@ -387,6 +389,99 @@ fn extract_model_options_from_bundle(entry_path: &Path) -> Result<Vec<ModelOptio
 pub async fn list_available_models(iflow_path: String) -> Result<Vec<ModelOption>, String> {
     let entry_path = resolve_iflow_bundle_entry(&iflow_path)?;
     extract_model_options_from_bundle(&entry_path)
+}
+
+async fn resolve_html_artifact_path_in_workspace(
+    workspace_path: &str,
+    file_path: &str,
+) -> Result<PathBuf, String> {
+    let workspace_root = tokio::fs::canonicalize(workspace_path).await.map_err(|e| {
+        format!(
+            "Failed to resolve workspace path {}: {}",
+            workspace_path, e
+        )
+    })?;
+
+    let mut requested_path = file_path.trim().to_string();
+    if requested_path.starts_with("file://") {
+        requested_path = requested_path.trim_start_matches("file://").to_string();
+    }
+    if requested_path.is_empty() {
+        return Err("Artifact file path cannot be empty".to_string());
+    }
+
+    let requested = PathBuf::from(&requested_path);
+    let target_path = if requested.is_absolute() {
+        requested
+    } else {
+        workspace_root.join(requested)
+    };
+
+    let canonical_target = tokio::fs::canonicalize(&target_path).await.map_err(|e| {
+        format!(
+            "Failed to resolve artifact path {}: {}",
+            target_path.display(),
+            e
+        )
+    })?;
+
+    if !canonical_target.starts_with(&workspace_root) {
+        return Err("Artifact path is outside workspace".to_string());
+    }
+
+    let extension = canonical_target
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or_default()
+        .to_lowercase();
+    if extension != "html" && extension != "htm" {
+        return Err("Only .html/.htm artifacts are supported".to_string());
+    }
+
+    Ok(canonical_target)
+}
+
+/// 读取 HTML Artifact（限制在当前 Agent 工作目录内）
+#[tauri::command]
+pub async fn read_html_artifact(
+    state: State<'_, AppState>,
+    agent_id: String,
+    file_path: String,
+) -> Result<String, String> {
+    let workspace_path = state
+        .agent_manager
+        .workspace_path_of(&agent_id)
+        .await
+        .ok_or_else(|| format!("Agent {} not found", agent_id))?;
+    let canonical_target =
+        resolve_html_artifact_path_in_workspace(&workspace_path, &file_path).await?;
+
+    let metadata = tokio::fs::metadata(&canonical_target).await.map_err(|e| {
+        format!(
+            "Failed to stat artifact {}: {}",
+            canonical_target.display(),
+            e
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err("Artifact path is not a file".to_string());
+    }
+    if metadata.len() > MAX_HTML_ARTIFACT_SIZE {
+        return Err(format!(
+            "Artifact is too large (>{} bytes)",
+            MAX_HTML_ARTIFACT_SIZE
+        ));
+    }
+
+    tokio::fs::read_to_string(&canonical_target)
+        .await
+        .map_err(|e| {
+        format!(
+            "Failed to read artifact {}: {}",
+            canonical_target.display(),
+            e
+        )
+    })
 }
 
 /// 发送消息

@@ -49,4 +49,11 @@ impl AgentManager {
         let agents = self.agents.read().await;
         agents.get(agent_id).map(|instance| instance.port)
     }
+
+    pub async fn workspace_path_of(&self, agent_id: &str) -> Option<String> {
+        let agents = self.agents.read().await;
+        agents
+            .get(agent_id)
+            .map(|instance| instance.info.workspace_path.clone())
+    }
 }
