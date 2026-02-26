@@ -298,9 +298,11 @@ body {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  transition: background-color 0.2s, color 0.2s, opacity 0.2s;
 }
 
-.session-item:hover .btn-session-delete {
+.btn-session-delete:hover,
+.btn-session-delete:focus-visible {
   opacity: 1;
   background: rgba(248, 81, 73, 0.18);
   color: #f85149;

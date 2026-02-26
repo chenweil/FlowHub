@@ -50,7 +50,10 @@ pub(crate) struct PlanEntry {
 
 #[derive(Debug)]
 pub(crate) enum ListenerCommand {
-    UserPrompt(String),
+    UserPrompt {
+        content: String,
+        session_id: Option<String>,
+    },
     CancelPrompt,
     SetModel {
         model: String,

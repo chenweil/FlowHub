@@ -12,6 +12,9 @@
 
 - 顶部工具栏新增模型选择器，支持显示当前模型、展开模型列表、点击切换模型。
 - 新增 ACP 模型元数据事件同步：后端解析 `session/new` / `session/load` 返回的 `_meta.models` 并推送到前端。
+- 新增 iFlow 历史会话导入能力：
+  - 后端读取 `~/.iflow/projects/<workspace-key>/session-*.jsonl`；
+  - 前端在 Agent 视图中合并展示历史会话列表，并按需加载历史消息正文。
 - 对话区新增快捷交互按钮：
   - 助手最后一条消息下显示“继续 / 好的 / 重试上一问”；
   - 用户最后一条消息下显示“重试发送”。
@@ -38,6 +41,17 @@
   - 引入基于 `Agent + 文件路径` 的内存缓存，重复打开同一文件更快；
   - 关闭预览时保留已渲染内容，减少重复解析成本。
   - 后端 HTML 读取链路改为 `tokio::fs` 异步 I/O，降低阻塞风险。
+- ACP 消息发送链路支持会话绑定：
+  - `send_message` 支持传入 `sessionId`；
+  - listener 在发送 prompt 前会根据目标 `sessionId` 执行 `session/load`，实现按会话继续对话。
+  - 当 `session/load` 失败时，会自动回退到 `session/new(sessionId=...)` 新建目标会话。
+- 本地新建会话会自动生成并绑定 `acpSessionId`，确保不同会话可在 ACP 侧独立延续。
+- 会话存储结构升级为“轻量索引”：
+  - Session 新增 `acpSessionId/source`；
+  - `source=iflow-log` 的消息正文不再写入本地快照，避免与 iFlow 日志重复存储。
+- iFlow 历史会话归属增强：
+  - 历史会话读取支持 workspace 原始路径与 canonical 路径双 key 候选目录；
+  - 解析 `session-*.jsonl` 时按记录内 `cwd` 严格匹配当前 Agent 目录，避免跨目录串会话。
 
 ### Fixed
 

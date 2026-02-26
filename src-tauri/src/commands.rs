@@ -1,7 +1,12 @@
 use std::env;
+use std::collections::HashSet;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
+use chrono::{DateTime, Utc};
+use serde::Serialize;
+use serde_json::Value;
 use tauri::State;
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
@@ -391,6 +396,378 @@ pub async fn list_available_models(iflow_path: String) -> Result<Vec<ModelOption
     extract_model_options_from_bundle(&entry_path)
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IflowHistorySession {
+    pub session_id: String,
+    pub title: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub message_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IflowHistoryMessage {
+    pub id: String,
+    pub role: String,
+    pub content: String,
+    pub timestamp: String,
+}
+
+fn normalize_workspace_path(workspace_path: &str) -> String {
+    let mut normalized = workspace_path.trim().replace('\\', "/");
+    while normalized.len() > 1 && normalized.ends_with('/') {
+        normalized.pop();
+    }
+    normalized
+}
+
+fn workspace_to_iflow_project_key(workspace_path: &str) -> String {
+    let normalized = normalize_workspace_path(workspace_path);
+    let mut key = normalized.replace('/', "-").replace(':', "-");
+    if !key.starts_with('-') {
+        key = format!("-{}", key);
+    }
+    key
+}
+
+fn iflow_projects_root() -> Result<PathBuf, String> {
+    let home_dir = env::var("HOME").map_err(|e| format!("HOME is not set: {}", e))?;
+    Ok(PathBuf::from(home_dir).join(".iflow").join("projects"))
+}
+
+fn iflow_project_dirs_for_workspace(
+    workspace_path: &str,
+    normalized_workspace_path: &str,
+) -> Result<Vec<PathBuf>, String> {
+    let mut candidates = Vec::new();
+    let mut seen = HashSet::new();
+
+    for path in [workspace_path, normalized_workspace_path] {
+        let key = workspace_to_iflow_project_key(path);
+        if seen.insert(key.clone()) {
+            candidates.push(iflow_projects_root()?.join(key));
+        }
+    }
+
+    Ok(candidates)
+}
+
+fn to_rfc3339_or_now(system_time: Option<std::time::SystemTime>) -> String {
+    system_time
+        .map(DateTime::<Utc>::from)
+        .map(|time| time.to_rfc3339())
+        .unwrap_or_else(|| Utc::now().to_rfc3339())
+}
+
+fn compact_title(raw: &str) -> String {
+    let normalized = raw.replace('\n', " ").replace('\r', " ").trim().to_string();
+    if normalized.is_empty() {
+        return "iFlow 会话".to_string();
+    }
+    let max_len = 28;
+    if normalized.chars().count() <= max_len {
+        return normalized;
+    }
+    format!("{}...", normalized.chars().take(max_len).collect::<String>())
+}
+
+fn extract_text_value(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => {
+            let normalized = text.trim();
+            if normalized.is_empty() {
+                None
+            } else {
+                Some(normalized.to_string())
+            }
+        }
+        Value::Array(items) => {
+            let parts: Vec<String> = items.iter().filter_map(extract_text_value).collect();
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join("\n"))
+            }
+        }
+        Value::Object(map) => {
+            if let Some(text) = map.get("text").and_then(extract_text_value) {
+                return Some(text);
+            }
+            map.get("content").and_then(extract_text_value)
+        }
+        _ => None,
+    }
+}
+
+fn extract_history_message_content(record: &Value) -> Option<String> {
+    record
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .and_then(extract_text_value)
+}
+
+fn extract_history_record_cwd(record: &Value) -> Option<String> {
+    record
+        .get("cwd")
+        .and_then(Value::as_str)
+        .map(normalize_workspace_path)
+}
+
+async fn parse_iflow_history_summary(
+    file_path: &Path,
+    session_id: &str,
+    expected_workspace_path: &str,
+) -> Result<Option<IflowHistorySession>, String> {
+    let raw = tokio::fs::read_to_string(file_path)
+        .await
+        .map_err(|e| format!("Failed to read {}: {}", file_path.display(), e))?;
+    let metadata = tokio::fs::metadata(file_path).await.ok();
+    let fallback_ts = to_rfc3339_or_now(metadata.and_then(|item| item.modified().ok()));
+
+    let mut created_at: Option<String> = None;
+    let mut updated_at: Option<String> = None;
+    let mut title: Option<String> = None;
+    let mut message_count = 0_usize;
+    let mut has_cwd = false;
+    let mut workspace_matches = false;
+
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let Ok(record) = serde_json::from_str::<Value>(trimmed) else {
+            continue;
+        };
+
+        let record_type = record
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        if record_type != "user" && record_type != "assistant" {
+            continue;
+        }
+
+        if let Some(cwd) = extract_history_record_cwd(&record) {
+            has_cwd = true;
+            if cwd == expected_workspace_path {
+                workspace_matches = true;
+            }
+        }
+
+        message_count += 1;
+
+        if let Some(ts) = record
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .map(|item| item.trim().to_string())
+            .filter(|item| !item.is_empty())
+        {
+            if created_at.is_none() {
+                created_at = Some(ts.clone());
+            }
+            updated_at = Some(ts);
+        }
+
+        if title.is_none() && record_type == "user" {
+            title = extract_history_message_content(&record);
+        }
+    }
+
+    if has_cwd && !workspace_matches {
+        return Ok(None);
+    }
+
+    Ok(Some(IflowHistorySession {
+        session_id: session_id.to_string(),
+        title: compact_title(title.as_deref().unwrap_or(session_id)),
+        created_at: created_at.unwrap_or_else(|| fallback_ts.clone()),
+        updated_at: updated_at.unwrap_or(fallback_ts),
+        message_count,
+    }))
+}
+
+async fn parse_iflow_history_messages(
+    file_path: &Path,
+    session_id: &str,
+    expected_workspace_path: &str,
+) -> Result<Vec<IflowHistoryMessage>, String> {
+    let raw = tokio::fs::read_to_string(file_path)
+        .await
+        .map_err(|e| format!("Failed to read {}: {}", file_path.display(), e))?;
+
+    let mut messages = Vec::new();
+    let mut has_cwd = false;
+    let mut workspace_matches = false;
+    for (index, line) in raw.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let Ok(record) = serde_json::from_str::<Value>(trimmed) else {
+            continue;
+        };
+
+        let record_type = record
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        let role = if record_type == "assistant" {
+            "assistant"
+        } else if record_type == "user" {
+            "user"
+        } else {
+            continue;
+        };
+
+        if let Some(cwd) = extract_history_record_cwd(&record) {
+            has_cwd = true;
+            if cwd == expected_workspace_path {
+                workspace_matches = true;
+            }
+        }
+
+        let Some(content) = extract_history_message_content(&record) else {
+            continue;
+        };
+        if content.trim().is_empty() {
+            continue;
+        }
+
+        let timestamp = record
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .map(|item| item.trim().to_string())
+            .filter(|item| !item.is_empty())
+            .unwrap_or_else(|| Utc::now().to_rfc3339());
+
+        let id = record
+            .get("uuid")
+            .and_then(Value::as_str)
+            .map(|item| item.to_string())
+            .unwrap_or_else(|| format!("{}-{}", session_id, index));
+
+        messages.push(IflowHistoryMessage {
+            id,
+            role: role.to_string(),
+            content,
+            timestamp,
+        });
+    }
+
+    if has_cwd && !workspace_matches {
+        return Err(format!(
+            "Session {} does not belong to workspace {}",
+            session_id, expected_workspace_path
+        ));
+    }
+
+    Ok(messages)
+}
+
+#[tauri::command]
+pub async fn list_iflow_history_sessions(
+    workspace_path: String,
+) -> Result<Vec<IflowHistorySession>, String> {
+    let normalized_workspace = match tokio::fs::canonicalize(&workspace_path).await {
+        Ok(path) => normalize_workspace_path(&path.to_string_lossy()),
+        Err(_) => normalize_workspace_path(&workspace_path),
+    };
+    let candidate_dirs = iflow_project_dirs_for_workspace(&workspace_path, &normalized_workspace)?;
+
+    let mut seen_sessions = HashSet::new();
+    let mut sessions = Vec::new();
+    for project_dir in candidate_dirs {
+        let mut reader = match tokio::fs::read_dir(&project_dir).await {
+            Ok(reader) => reader,
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(format!(
+                    "Failed to open iFlow project dir {}: {}",
+                    project_dir.display(),
+                    error
+                ))
+            }
+        };
+
+        while let Some(entry) = reader
+            .next_entry()
+            .await
+            .map_err(|e| format!("Failed to read iFlow project entry: {}", e))?
+        {
+            let path = entry.path();
+            let file_name = entry.file_name();
+            let file_name = file_name.to_string_lossy();
+            if !file_name.starts_with("session-") || !file_name.ends_with(".jsonl") {
+                continue;
+            }
+
+            let session_id = file_name.trim_end_matches(".jsonl").to_string();
+            if !seen_sessions.insert(session_id.clone()) {
+                continue;
+            }
+            if let Ok(Some(summary)) =
+                parse_iflow_history_summary(&path, &session_id, &normalized_workspace).await
+            {
+                sessions.push(summary);
+            }
+        }
+    }
+
+    sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    Ok(sessions)
+}
+
+#[tauri::command]
+pub async fn load_iflow_history_messages(
+    workspace_path: String,
+    session_id: String,
+) -> Result<Vec<IflowHistoryMessage>, String> {
+    let normalized_session_id = session_id.trim().trim_end_matches(".jsonl").to_string();
+    if normalized_session_id.is_empty() {
+        return Err("session_id cannot be empty".to_string());
+    }
+    if !normalized_session_id.starts_with("session-") {
+        return Err("Invalid session_id format".to_string());
+    }
+
+    let normalized_workspace = match tokio::fs::canonicalize(&workspace_path).await {
+        Ok(path) => normalize_workspace_path(&path.to_string_lossy()),
+        Err(_) => normalize_workspace_path(&workspace_path),
+    };
+    let candidate_dirs = iflow_project_dirs_for_workspace(&workspace_path, &normalized_workspace)?;
+
+    for project_dir in candidate_dirs {
+        let file_path = project_dir.join(format!("{}.jsonl", normalized_session_id));
+        match tokio::fs::metadata(&file_path).await {
+            Ok(metadata) if metadata.is_file() => {
+                return parse_iflow_history_messages(
+                    &file_path,
+                    &normalized_session_id,
+                    &normalized_workspace,
+                )
+                .await;
+            }
+            Ok(_) => continue,
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(format!("Failed to inspect {}: {}", file_path.display(), error));
+            }
+        }
+    }
+
+    Err(format!(
+        "Session file not found for {} under workspace {}",
+        normalized_session_id, normalized_workspace
+    ))
+}
+
 async fn resolve_html_artifact_path_in_workspace(
     workspace_path: &str,
     file_path: &str,
@@ -490,6 +867,7 @@ pub async fn send_message(
     state: State<'_, AppState>,
     agent_id: String,
     content: String,
+    session_id: Option<String>,
 ) -> Result<(), String> {
     println!(
         "[send_message] Starting for agent {}: {}",
@@ -519,7 +897,10 @@ pub async fn send_message(
             "[send_message] Queueing user prompt to listener: {}",
             &content[..content.len().min(100)]
         );
-        match sender.send(ListenerCommand::UserPrompt(content)) {
+        match sender.send(ListenerCommand::UserPrompt {
+            content,
+            session_id,
+        }) {
             Ok(_) => {
                 println!("[send_message] Prompt queued successfully");
                 Ok(())

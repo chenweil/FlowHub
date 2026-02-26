@@ -231,6 +231,17 @@ fn build_session_new_params(workspace_path: &str) -> Value {
     })
 }
 
+fn build_session_new_params_with_id(workspace_path: &str, session_id: &str) -> Value {
+    json!({
+        "cwd": workspace_path,
+        "sessionId": session_id,
+        "mcpServers": [],
+        "settings": {
+            "permission_mode": "yolo",
+        }
+    })
+}
+
 fn build_session_load_params(workspace_path: &str, session_id: &str) -> Value {
     json!({
         "cwd": workspace_path,
@@ -476,8 +487,8 @@ pub async fn message_listener_task(
     let max_retries = 5;
     let mut cached_session_id: Option<String> = None;
 
-    // 未 ready 前收到的 prompt 先入队
-    let mut queued_prompts: VecDeque<String> = VecDeque::new();
+    // 未 ready 前收到的 prompt 先入队。每条可绑定一个目标 sessionId（用于恢复指定会话后再发送）。
+    let mut queued_prompts: VecDeque<(String, Option<String>)> = VecDeque::new();
 
     while retry_count < max_retries {
         println!(
@@ -494,7 +505,10 @@ pub async fn message_listener_task(
                 let mut rpc_id_counter: i64 = 1;
                 let mut initialize_request_id: Option<i64>;
                 let mut session_new_request_id: Option<i64> = None;
+                let mut session_new_target_id: Option<String> = None;
                 let mut session_load_request_id: Option<i64> = None;
+                let mut session_load_target_id: Option<String> = None;
+                let mut session_load_for_initialize = false;
                 let mut session_id: Option<String> = cached_session_id.clone();
                 let mut pending_prompt_request_ids: HashSet<i64> = HashSet::new();
                 let mut pending_set_model_requests: HashMap<
@@ -515,7 +529,35 @@ pub async fn message_listener_task(
                     tokio::select! {
                         msg = message_rx.recv() => {
                             match msg {
-                                Some(ListenerCommand::UserPrompt(prompt)) => {
+                                Some(ListenerCommand::UserPrompt { content: prompt, session_id: requested_session_id }) => {
+                                    let target_session_id = requested_session_id
+                                        .map(|item| item.trim().to_string())
+                                        .filter(|item| !item.is_empty());
+
+                                    if let Some(target) = target_session_id.as_ref() {
+                                        if session_id.as_deref() != Some(target.as_str()) {
+                                            println!("[listener] Session switch requested: {} -> {}", session_id.as_deref().unwrap_or("<none>"), target);
+                                            queued_prompts.push_back((prompt, target_session_id.clone()));
+
+                                            if session_load_request_id.is_none() {
+                                                let load_id = next_rpc_id(&mut rpc_id_counter);
+                                                session_load_request_id = Some(load_id);
+                                                session_load_target_id = Some(target.clone());
+                                                session_load_for_initialize = false;
+                                                let load_request = build_rpc_request(
+                                                    load_id,
+                                                    "session/load",
+                                                    build_session_load_params(&workspace_path, target),
+                                                );
+                                                if let Err(e) = conn.send_message(load_request).await {
+                                                    println!("[listener] Failed to send session/load: {}", e);
+                                                    break;
+                                                }
+                                            }
+                                            continue;
+                                        }
+                                    }
+
                                     if let Some(current_session_id) = &session_id {
                                         let prompt_id = next_rpc_id(&mut rpc_id_counter);
                                         let prompt_request = build_rpc_request(
@@ -527,13 +569,13 @@ pub async fn message_listener_task(
                                         println!("[listener] Sending session/prompt request: id={}", prompt_id);
                                         if let Err(e) = conn.send_message(prompt_request).await {
                                             println!("[listener] Failed to send prompt: {}", e);
-                                            queued_prompts.push_front(prompt);
+                                            queued_prompts.push_front((prompt, target_session_id));
                                             break;
                                         }
                                         pending_prompt_request_ids.insert(prompt_id);
                                     } else {
                                         println!("[listener] Session not ready, prompt queued");
-                                        queued_prompts.push_back(prompt);
+                                        queued_prompts.push_back((prompt, target_session_id));
                                     }
                                 }
                                 Some(ListenerCommand::CancelPrompt) => {
@@ -649,6 +691,8 @@ pub async fn message_listener_task(
                                             if let Some(existing_session_id) = &session_id {
                                                 let session_load_id = next_rpc_id(&mut rpc_id_counter);
                                                 session_load_request_id = Some(session_load_id);
+                                                session_load_target_id = Some(existing_session_id.clone());
+                                                session_load_for_initialize = true;
                                                 let session_load_request = build_rpc_request(
                                                     session_load_id,
                                                     "session/load",
@@ -662,6 +706,7 @@ pub async fn message_listener_task(
                                             } else {
                                                 let session_new_id = next_rpc_id(&mut rpc_id_counter);
                                                 session_new_request_id = Some(session_new_id);
+                                                session_new_target_id = None;
                                                 let session_new_request = build_rpc_request(
                                                     session_new_id,
                                                     "session/new",
@@ -679,23 +724,76 @@ pub async fn message_listener_task(
 
                                         if session_load_request_id == Some(response_id) {
                                             session_load_request_id = None;
+                                            let load_target = session_load_target_id.take();
+                                            let load_was_initialize = session_load_for_initialize;
+                                            session_load_for_initialize = false;
 
                                             if let Some(error) = message_json.get("error") {
                                                 println!("[listener] session/load failed: {}", error);
-                                                // 如果恢复失败，回退到创建新会话
-                                                let session_new_id = next_rpc_id(&mut rpc_id_counter);
-                                                session_new_request_id = Some(session_new_id);
-                                                let session_new_request = build_rpc_request(
-                                                    session_new_id,
-                                                    "session/new",
-                                                    build_session_new_params(&workspace_path),
-                                                );
+                                                if load_was_initialize {
+                                                    // 初始化恢复失败时，回退到创建新会话
+                                                    let session_new_id = next_rpc_id(&mut rpc_id_counter);
+                                                    session_new_request_id = Some(session_new_id);
+                                                    session_new_target_id = None;
+                                                    let session_new_request = build_rpc_request(
+                                                        session_new_id,
+                                                        "session/new",
+                                                        build_session_new_params(&workspace_path),
+                                                    );
 
-                                                if let Err(e) = conn.send_message(session_new_request).await {
-                                                    println!("[listener] Failed to send fallback session/new: {}", e);
-                                                    break;
+                                                    if let Err(e) = conn.send_message(session_new_request).await {
+                                                        println!("[listener] Failed to send fallback session/new: {}", e);
+                                                        break;
+                                                    }
+                                                } else if let Some(target) = load_target.as_ref() {
+                                                    // 指定会话恢复失败时，尝试使用自定义 sessionId 新建会话（新版 ACP 支持）
+                                                    let session_new_id = next_rpc_id(&mut rpc_id_counter);
+                                                    session_new_request_id = Some(session_new_id);
+                                                    session_new_target_id = Some(target.clone());
+                                                    let session_new_request = build_rpc_request(
+                                                        session_new_id,
+                                                        "session/new",
+                                                        build_session_new_params_with_id(
+                                                            &workspace_path,
+                                                            target,
+                                                        ),
+                                                    );
+                                                    if let Err(e) = conn.send_message(session_new_request).await {
+                                                        println!(
+                                                            "[listener] Failed to send targeted session/new: {}",
+                                                            e
+                                                        );
+                                                        let _ = app_handle.emit(
+                                                            "agent-error",
+                                                            json!({
+                                                                "agentId": &agent_id,
+                                                                "error": format!("session/load failed and session/new fallback failed for {}: {}", target, error),
+                                                            }),
+                                                        );
+                                                        break;
+                                                    }
+                                                } else {
+                                                    let _ = app_handle.emit(
+                                                        "agent-error",
+                                                        json!({
+                                                            "agentId": &agent_id,
+                                                            "error": format!("session/load failed: {}", error),
+                                                        }),
+                                                    );
                                                 }
                                                 continue;
+                                            }
+
+                                            if let Some(target_session_id) = load_target {
+                                                session_id = Some(target_session_id.clone());
+                                                cached_session_id = Some(target_session_id.clone());
+                                                let _ = app_handle.emit(
+                                                    "acp-session",
+                                                    json!({
+                                                        "agentId": &agent_id,
+                                                        "sessionId": target_session_id,
+                                                    }),
+                                                );
                                             }
 
                                             if let Some(result) = message_json.get("result") {
@@ -703,17 +801,55 @@ pub async fn message_listener_task(
                                                 emit_model_registry_payload(&app_handle, &agent_id, result);
                                             }
 
+                                            let message_text = if load_was_initialize {
+                                                "✅ iFlow ACP 会话已恢复"
+                                            } else {
+                                                "✅ 已切换到目标会话"
+                                            };
                                             let _ = app_handle.emit(
                                                 "stream-message",
                                                 json!({
                                                     "agentId": &agent_id,
-                                                    "content": "✅ iFlow ACP 会话已恢复",
+                                                    "content": message_text,
                                                     "type": "system",
                                                 }),
                                             );
 
-                                            if let Some(current_session_id) = &session_id {
-                                                while let Some(prompt) = queued_prompts.pop_front() {
+                                            while let Some((prompt, target_session_id)) =
+                                                queued_prompts.pop_front()
+                                            {
+                                                if let Some(target) = target_session_id.as_ref() {
+                                                    if session_id.as_deref() != Some(target.as_str()) {
+                                                        queued_prompts.push_front((
+                                                            prompt,
+                                                            target_session_id.clone(),
+                                                        ));
+                                                        if session_load_request_id.is_none() {
+                                                            let load_id = next_rpc_id(&mut rpc_id_counter);
+                                                            session_load_request_id = Some(load_id);
+                                                            session_load_target_id = Some(target.clone());
+                                                            session_load_for_initialize = false;
+                                                            let load_request = build_rpc_request(
+                                                                load_id,
+                                                                "session/load",
+                                                                build_session_load_params(
+                                                                    &workspace_path,
+                                                                    target,
+                                                                ),
+                                                            );
+                                                            if let Err(e) = conn.send_message(load_request).await {
+                                                                println!(
+                                                                    "[listener] Failed to send queued session/load: {}",
+                                                                    e
+                                                                );
+                                                                break;
+                                                            }
+                                                        }
+                                                        break;
+                                                    }
+                                                }
+
+                                                if let Some(current_session_id) = &session_id {
                                                     let prompt_id = next_rpc_id(&mut rpc_id_counter);
                                                     let prompt_request = build_rpc_request(
                                                         prompt_id,
@@ -722,10 +858,16 @@ pub async fn message_listener_task(
                                                     );
                                                     if let Err(e) = conn.send_message(prompt_request).await {
                                                         println!("[listener] Failed to flush prompt queue: {}", e);
-                                                        queued_prompts.push_front(prompt);
+                                                        queued_prompts.push_front((
+                                                            prompt,
+                                                            target_session_id,
+                                                        ));
                                                         break;
                                                     }
                                                     pending_prompt_request_ids.insert(prompt_id);
+                                                } else {
+                                                    queued_prompts.push_front((prompt, target_session_id));
+                                                    break;
                                                 }
                                             }
 
@@ -734,13 +876,21 @@ pub async fn message_listener_task(
 
                                         if session_new_request_id == Some(response_id) {
                                             session_new_request_id = None;
+                                            let requested_session_id = session_new_target_id.take();
 
                                             if let Some(error) = message_json.get("error") {
                                                 let _ = app_handle.emit(
                                                     "agent-error",
                                                     json!({
                                                         "agentId": &agent_id,
-                                                        "error": format!("session/new failed: {}", error),
+                                                        "error": format!(
+                                                            "session/new failed{}: {}",
+                                                            requested_session_id
+                                                                .as_ref()
+                                                                .map(|item| format!(" for {}", item))
+                                                                .unwrap_or_default(),
+                                                            error
+                                                        ),
                                                     }),
                                                 );
                                                 break;
@@ -750,7 +900,8 @@ pub async fn message_listener_task(
                                                 .get("result")
                                                 .and_then(|r| r.get("sessionId"))
                                                 .and_then(Value::as_str)
-                                                .map(|s| s.to_string());
+                                                .map(|s| s.to_string())
+                                                .or(requested_session_id);
                                             cached_session_id = session_id.clone();
 
                                             if session_id.is_none() {
@@ -770,7 +921,49 @@ pub async fn message_listener_task(
                                             }
 
                                             if let Some(current_session_id) = &session_id {
-                                                while let Some(prompt) = queued_prompts.pop_front() {
+                                                let _ = app_handle.emit(
+                                                    "acp-session",
+                                                    json!({
+                                                        "agentId": &agent_id,
+                                                        "sessionId": current_session_id,
+                                                    }),
+                                                );
+                                            }
+
+                                            if let Some(current_session_id) = &session_id {
+                                                while let Some((prompt, target_session_id)) =
+                                                    queued_prompts.pop_front()
+                                                {
+                                                    if let Some(target) = target_session_id.as_ref() {
+                                                        if session_id.as_deref() != Some(target.as_str()) {
+                                                            queued_prompts.push_front((
+                                                                prompt,
+                                                                target_session_id.clone(),
+                                                            ));
+                                                            if session_load_request_id.is_none() {
+                                                                let load_id = next_rpc_id(&mut rpc_id_counter);
+                                                                session_load_request_id = Some(load_id);
+                                                                session_load_target_id = Some(target.clone());
+                                                                session_load_for_initialize = false;
+                                                                let load_request = build_rpc_request(
+                                                                    load_id,
+                                                                    "session/load",
+                                                                    build_session_load_params(
+                                                                        &workspace_path,
+                                                                        target,
+                                                                    ),
+                                                                );
+                                                                if let Err(e) = conn.send_message(load_request).await {
+                                                                    println!(
+                                                                        "[listener] Failed to send queued session/load: {}",
+                                                                        e
+                                                                    );
+                                                                    break;
+                                                                }
+                                                            }
+                                                            break;
+                                                        }
+                                                    }
                                                     let prompt_id = next_rpc_id(&mut rpc_id_counter);
                                                     let prompt_request = build_rpc_request(
                                                         prompt_id,
@@ -779,7 +972,10 @@ pub async fn message_listener_task(
                                                     );
                                                     if let Err(e) = conn.send_message(prompt_request).await {
                                                         println!("[listener] Failed to flush prompt queue: {}", e);
-                                                        queued_prompts.push_front(prompt);
+                                                        queued_prompts.push_front((
+                                                            prompt,
+                                                            target_session_id,
+                                                        ));
                                                         break;
                                                     }
                                                     pending_prompt_request_ids.insert(prompt_id);

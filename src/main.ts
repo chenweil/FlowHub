@@ -50,6 +50,8 @@ interface Session {
   title: string;
   createdAt: Date;
   updatedAt: Date;
+  acpSessionId?: string;
+  source?: 'local' | 'iflow-log';
 }
 
 interface Message {
@@ -106,6 +108,8 @@ interface StoredSession {
   title: string;
   createdAt: string;
   updatedAt: string;
+  acpSessionId?: string;
+  source?: 'local' | 'iflow-log';
 }
 
 interface StoredMessage {
@@ -123,6 +127,21 @@ type LegacyMessageHistoryMap = Record<string, StoredMessage[]>;
 interface StorageSnapshot {
   sessionsByAgent: StoredSessionMap;
   messagesBySession: StoredMessageMap;
+}
+
+interface IflowHistorySessionRecord {
+  sessionId: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+}
+
+interface IflowHistoryMessageRecord {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
 }
 
 // 状态
@@ -194,6 +213,14 @@ const TITLE_GENERIC_PHRASES = new Set<string>([
 const ASSISTANT_QUICK_REPLIES: ReadonlyArray<string> = ['继续', '好的'];
 const HTML_ARTIFACT_PATH_PATTERN = /\.html?$/i;
 const ARTIFACT_PREVIEW_CACHE_LIMIT = 8;
+
+function generateAcpSessionId(): string {
+  const randomUuid =
+    typeof globalThis.crypto?.randomUUID === 'function'
+      ? globalThis.crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+  return `session-${randomUuid}`;
+}
 
 // 初始化
 async function init() {
@@ -327,6 +354,14 @@ function setupTauriEventListeners() {
     }
 
     applyAgentModelRegistry(payload.agentId, payload.models, payload.currentModel);
+  });
+
+  listen('acp-session', (event) => {
+    const payload = event.payload as { agentId?: string; sessionId?: string };
+    if (!payload.agentId || !payload.sessionId) {
+      return;
+    }
+    applyAcpSessionBinding(payload.agentId, payload.sessionId);
   });
 
   listen('task-finish', (event) => {
@@ -476,6 +511,41 @@ function applyAgentModelRegistry(
     if (modelSelectorOpen) {
       renderCurrentAgentModelMenu(agent, modelOptionsCacheByAgent[agentId] || []);
     }
+  }
+}
+
+function applyAcpSessionBinding(agentId: string, acpSessionId: string) {
+  const normalizedSessionId = acpSessionId.trim();
+  if (!normalizedSessionId) {
+    return;
+  }
+
+  const preferredSessionId =
+    inflightSessionByAgent[agentId] ||
+    (agentId === currentAgentId && currentSessionId ? currentSessionId : null);
+  const sessionList = sessionsByAgent[agentId] || [];
+
+  let targetSession = preferredSessionId
+    ? sessionList.find((item) => item.id === preferredSessionId)
+    : null;
+  if (!targetSession) {
+    targetSession = sessionList.find((item) => item.acpSessionId === normalizedSessionId) || null;
+  }
+  if (!targetSession) {
+    return;
+  }
+
+  if (targetSession.acpSessionId === normalizedSessionId) {
+    return;
+  }
+
+  targetSession.acpSessionId = normalizedSessionId;
+  if (!targetSession.source) {
+    targetSession.source = 'local';
+  }
+  void saveSessions();
+  if (targetSession.agentId === currentAgentId) {
+    renderSessionList();
   }
 }
 
@@ -1576,6 +1646,127 @@ async function addAgent(name: string, iflowPath: string, workspacePath: string) 
   }
 }
 
+function parseDateOrNow(raw: string | Date): Date {
+  if (raw instanceof Date) {
+    return raw;
+  }
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+}
+
+function buildHistorySessionLocalId(agentId: string, acpSessionId: string): string {
+  return `iflowlog-${agentId}-${acpSessionId}`;
+}
+
+async function syncIflowHistorySessions(agent: Agent): Promise<void> {
+  if (agent.status !== 'connected') {
+    return;
+  }
+
+  try {
+    const histories = await invoke<IflowHistorySessionRecord[]>('list_iflow_history_sessions', {
+      workspacePath: agent.workspacePath,
+    });
+    if (!Array.isArray(histories) || histories.length === 0) {
+      return;
+    }
+
+    ensureAgentHasSessions(agent.id);
+    const sessionList = sessionsByAgent[agent.id] || [];
+    let changed = false;
+
+    for (const history of histories) {
+      const acpSessionId = String(history.sessionId || '').trim();
+      if (!acpSessionId) {
+        continue;
+      }
+
+      const existing = sessionList.find((item) => item.acpSessionId === acpSessionId);
+      if (existing) {
+        const nextUpdatedAt = parseDateOrNow(history.updatedAt);
+        if (nextUpdatedAt.getTime() > existing.updatedAt.getTime()) {
+          existing.updatedAt = nextUpdatedAt;
+          changed = true;
+        }
+        if (existing.source === 'iflow-log' && history.title && existing.title !== history.title) {
+          existing.title = history.title;
+          changed = true;
+        }
+        continue;
+      }
+
+      const imported: Session = {
+        id: buildHistorySessionLocalId(agent.id, acpSessionId),
+        agentId: agent.id,
+        title: (history.title || acpSessionId).trim(),
+        createdAt: parseDateOrNow(history.createdAt),
+        updatedAt: parseDateOrNow(history.updatedAt),
+        acpSessionId,
+        source: 'iflow-log',
+      };
+      sessionList.push(imported);
+      changed = true;
+    }
+
+    if (!changed) {
+      return;
+    }
+
+    sessionsByAgent[agent.id] = sessionList;
+    await saveSessions();
+    if (currentAgentId === agent.id) {
+      renderSessionList();
+    }
+  } catch (error) {
+    console.error('Sync iFlow history sessions error:', error);
+  }
+}
+
+async function loadIflowHistoryMessagesForSession(session: Session): Promise<void> {
+  if (!session.acpSessionId) {
+    return;
+  }
+  const agent = agents.find((item) => item.id === session.agentId);
+  if (!agent) {
+    return;
+  }
+
+  try {
+    const rawMessages = await invoke<IflowHistoryMessageRecord[]>('load_iflow_history_messages', {
+      workspacePath: agent.workspacePath,
+      sessionId: session.acpSessionId,
+    });
+
+    const normalized: Message[] = (Array.isArray(rawMessages) ? rawMessages : [])
+      .map((item) => {
+        const role: Message['role'] = item.role === 'user' ? 'user' : 'assistant';
+        return {
+          id: item.id,
+          role,
+          content: item.content,
+          timestamp: parseDateOrNow(item.timestamp),
+        };
+      })
+      .filter((item) => item.content.trim().length > 0);
+
+    messagesBySession[session.id] = normalized;
+
+    if (currentSessionId === session.id) {
+      messages = normalized;
+      renderMessages();
+      scrollToBottom();
+      refreshComposerState();
+    } else {
+      renderSessionList();
+    }
+  } catch (error) {
+    console.error('Load iFlow history messages error:', error);
+    if (currentSessionId === session.id) {
+      showError(`加载历史会话失败: ${String(error)}`);
+    }
+  }
+}
+
 // 选择 Agent
 function selectAgent(agentId: string) {
   closeCurrentAgentModelMenu();
@@ -1618,6 +1809,7 @@ function selectAgent(agentId: string) {
   }
   refreshComposerState();
   if (isConnected) {
+    void syncIflowHistorySessions(agent);
     void loadAgentModelOptions(agent).then(() => {
       if (currentAgentId === agent.id) {
         updateCurrentAgentModelUI();
@@ -2335,9 +2527,15 @@ async function sendMessage() {
   refreshComposerState();
 
   try {
+    const targetSession = findSessionById(requestSessionId);
+    if (targetSession && targetSession.source !== 'iflow-log' && !targetSession.acpSessionId) {
+      targetSession.acpSessionId = generateAcpSessionId();
+      void saveSessions();
+    }
     await invoke('send_message', {
       agentId: requestAgentId,
       content,
+      sessionId: targetSession?.acpSessionId || null,
     });
 
     messages = messages.filter((m) => m.id !== sendingMessage.id);
@@ -2607,7 +2805,19 @@ function selectSession(sessionId: string) {
   }
 
   currentSessionId = sessionId;
-  messages = getMessagesForSession(sessionId);
+  const cachedMessages = getMessagesForSession(sessionId);
+  messages = cachedMessages;
+  if (session.source === 'iflow-log' && cachedMessages.length === 0) {
+    messages = [
+      {
+        id: `msg-${Date.now()}-history-loading`,
+        role: 'system',
+        content: '正在加载 iFlow 历史会话内容...',
+        timestamp: new Date(),
+      },
+    ];
+    void loadIflowHistoryMessagesForSession(session);
+  }
   renderSessionList();
   renderMessages();
   scrollToBottom();
@@ -2627,6 +2837,8 @@ function createSession(agentId: string, title = '新会话'): Session {
     title,
     createdAt: now,
     updatedAt: now,
+    acpSessionId: generateAcpSessionId(),
+    source: 'local',
   };
 }
 
@@ -2654,6 +2866,16 @@ function getMessagesForSession(sessionId: string): Message[] {
     ...msg,
     timestamp: new Date(msg.timestamp),
   }));
+}
+
+function findSessionById(sessionId: string): Session | null {
+  for (const sessionList of Object.values(sessionsByAgent)) {
+    const matched = sessionList.find((item) => item.id === sessionId);
+    if (matched) {
+      return matched;
+    }
+  }
+  return null;
 }
 
 function touchCurrentSession() {
@@ -2905,6 +3127,11 @@ function parseStoredSession(session: StoredSession): Session {
     title: normalizedTitle,
     createdAt: new Date(session.createdAt),
     updatedAt: new Date(session.updatedAt),
+    acpSessionId:
+      typeof session.acpSessionId === 'string' && session.acpSessionId.trim().length > 0
+        ? session.acpSessionId.trim()
+        : undefined,
+    source: session.source === 'iflow-log' ? 'iflow-log' : 'local',
   };
 }
 
@@ -2913,6 +3140,8 @@ function toStoredSession(session: Session): StoredSession {
     ...session,
     createdAt: session.createdAt.toISOString(),
     updatedAt: session.updatedAt.toISOString(),
+    acpSessionId: session.acpSessionId,
+    source: session.source || 'local',
   };
 }
 
@@ -2935,6 +3164,10 @@ function persistCurrentSessionMessages() {
   if (!currentSessionId) {
     return;
   }
+  const session = findSessionById(currentSessionId);
+  if (session?.source === 'iflow-log') {
+    return;
+  }
   messagesBySession[currentSessionId] = messages.map((msg) => ({
     ...msg,
     timestamp: new Date(msg.timestamp),
@@ -2953,6 +3186,10 @@ function buildStoredSessionMap(): StoredSessionMap {
 function buildStoredMessageMap(): StoredMessageMap {
   const payload: StoredMessageMap = {};
   for (const [sessionId, sessionMessages] of Object.entries(messagesBySession)) {
+    const session = findSessionById(sessionId);
+    if (session?.source === 'iflow-log') {
+      continue;
+    }
     payload[sessionId] = sessionMessages.map(toStoredMessage);
   }
   return payload;
