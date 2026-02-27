@@ -35,6 +35,40 @@
   --radius-lg: 12px;
 }
 
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg-primary: #ffffff;
+    --bg-secondary: #f6f8fa;
+    --bg-tertiary: #eaeef2;
+    --bg-code: #f0f2f4;
+    --bg-busy: #eaeef2;
+    --border-color: #d0d7de;
+    --text-primary: #1f2328;
+    --text-secondary: #636c76;
+    --text-muted: #818b98;
+    --text-subtle: #6e7781;
+    --text-dim: #57606a;
+    --accent-color: #0969da;
+    --accent-hover: #0550ae;
+    --accent-secondary: #8250df;
+    --success-color: #1a7f37;
+    --success-text: #1a7f37;
+    --warning-color: #9a6700;
+    --error-color: #cf222e;
+  }
+
+  /* 下拉菜单阴影：深色硬编码需要覆盖 */
+  .model-selector-menu,
+  .slash-command-menu {
+    box-shadow: 0 8px 24px rgba(31, 35, 40, 0.12);
+  }
+
+  /* 表格背景：深色 rgba 在浅色模式下显异常 */
+  .markdown-content .md-table {
+    background: var(--bg-secondary);
+  }
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
   background: var(--bg-primary);
