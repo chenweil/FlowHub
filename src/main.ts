@@ -29,7 +29,8 @@ import {
 import { generateAcpSessionId, shortAgentId, getWorkspaceName, streamTypeToRole, normalizeStoredRole, formatTime, formatSessionMeta } from './lib/utils';
 import { escapeHtml } from './lib/html';
 import { formatMessageContent, normalizeTitleSource } from './lib/markdown';
-import type { Agent, Session, Message, ToolCall, RegistryCommand, RegistryMcpServer, ModelOption, AgentRegistry, SlashMenuItem, StoredSession, StoredMessage, StoredSessionMap, StoredMessageMap, LegacyMessageHistoryMap, StorageSnapshot, IflowHistoryMessageRecord, ComposerState, StreamMessageType, ThemeMode, ParsedModelSlashCommand } from './types';
+import type { Agent, Session, Message, ToolCall, RegistryCommand, RegistryMcpServer, ModelOption, SlashMenuItem, StoredSession, StoredMessage, StoredSessionMap, StoredMessageMap, LegacyMessageHistoryMap, StorageSnapshot, IflowHistoryMessageRecord, ComposerState, StreamMessageType, ThemeMode, ParsedModelSlashCommand } from './types';
+import { state } from './store';
 
 // DOM 元素
 const addAgentBtnEl = document.getElementById('add-agent-btn') as HTMLButtonElement;
@@ -74,28 +75,6 @@ const artifactPreviewFrameEl = document.getElementById('artifact-preview-frame')
 const themeToggleBtnEl = document.getElementById('theme-toggle-btn') as HTMLButtonElement;
 const appVersionEl = document.getElementById('app-version') as HTMLDivElement;
 
-// 状态
-let agents: Agent[] = [];
-let currentAgentId: string | null = null;
-let currentSessionId: string | null = null;
-let messages: Message[] = [];
-
-let sessionsByAgent: Record<string, Session[]> = {};
-let messagesBySession: Record<string, Message[]> = {};
-let inflightSessionByAgent: Record<string, string> = {};
-let registryByAgent: Record<string, AgentRegistry> = {};
-let toolCallsByAgent: Record<string, ToolCall[]> = {};
-let modelOptionsCacheByAgent: Record<string, ModelOption[]> = {};
-let modelSelectorOpen = false;
-let modelSwitchingAgentId: string | null = null;
-let slashMenuItems: SlashMenuItem[] = [];
-let slashMenuVisible = false;
-let slashMenuActiveIndex = 0;
-let artifactPreviewRequestToken = 0;
-let artifactPreviewCacheByKey = new Map<string, string>();
-let artifactPreviewCacheOrder: string[] = [];
-let artifactPreviewLastKey: string | null = null;
-let renamingAgentId: string | null = null;
 
 const AGENTS_STORAGE_KEY = 'iflow-agents';
 const SESSIONS_STORAGE_KEY = 'iflow-sessions';
@@ -155,7 +134,6 @@ const THEME_CYCLE: Record<ThemeMode, ThemeMode> = { system: 'light', light: 'dar
 const THEME_ICON: Record<ThemeMode, string> = { system: '◑', light: '☀', dark: '☾' };
 const THEME_TITLE: Record<ThemeMode, string> = { system: '跟随系统', light: '亮色模式', dark: '暗色模式' };
 
-let currentTheme: ThemeMode = (localStorage.getItem(THEME_STORAGE_KEY) as ThemeMode) || 'system';
 
 function applyTheme(mode: ThemeMode) {
   const root = document.documentElement;
@@ -167,7 +145,7 @@ function applyTheme(mode: ThemeMode) {
 
 async function init() {
   console.log('Initializing app...');
-  applyTheme(currentTheme);
+  applyTheme(state.currentTheme);
   await syncAppVersion();
   await loadAgents();
   setupEventListeners();
@@ -222,9 +200,9 @@ function setComposerState(state: ComposerState, hint: string) {
 }
 
 function refreshComposerState() {
-  const currentAgent = currentAgentId ? agents.find((agent) => agent.id === currentAgentId) : null;
+  const currentAgent = state.currentAgentId ? state.agents.find((agent) => agent.id === state.currentAgentId) : null;
   const isConnected = currentAgent?.status === 'connected';
-  const hasSession = Boolean(currentSessionId);
+  const hasSession = Boolean(state.currentSessionId);
   const isBusy = isCurrentAgentBusy();
 
   if (!isConnected || !hasSession) {
@@ -247,8 +225,8 @@ function refreshComposerState() {
 }
 
 function isCurrentAgentBusy(): boolean {
-  const currentAgent = currentAgentId ? agents.find((agent) => agent.id === currentAgentId) : null;
-  return Boolean(currentAgent && inflightSessionByAgent[currentAgent.id]);
+  const currentAgent = state.currentAgentId ? state.agents.find((agent) => agent.id === state.currentAgentId) : null;
+  return Boolean(currentAgent && state.inflightSessionByAgent[currentAgent.id]);
 }
 
 // 设置 Tauri 事件监听
@@ -260,14 +238,14 @@ function setupTauriEventListeners() {
       return;
     }
 
-    if (payload.agentId === currentAgentId && messageTimeout) {
-      clearTimeout(messageTimeout);
-      messageTimeout = null;
+    if (payload.agentId === state.currentAgentId && state.messageTimeout) {
+      clearTimeout(state.messageTimeout);
+      state.messageTimeout = null;
     }
 
     const targetSessionId =
-      inflightSessionByAgent[payload.agentId] ||
-      (payload.agentId === currentAgentId ? currentSessionId : null);
+      state.inflightSessionByAgent[payload.agentId] ||
+      (payload.agentId === state.currentAgentId ? state.currentSessionId : null);
 
     if (!targetSessionId) {
       return;
@@ -310,25 +288,25 @@ function setupTauriEventListeners() {
       return;
     }
 
-    const targetSessionId = inflightSessionByAgent[payload.agentId];
+    const targetSessionId = state.inflightSessionByAgent[payload.agentId];
     if (targetSessionId) {
-      delete inflightSessionByAgent[payload.agentId];
+      delete state.inflightSessionByAgent[payload.agentId];
     }
 
-    if (payload.agentId === currentAgentId) {
-      if (messageTimeout) {
-        clearTimeout(messageTimeout);
-        messageTimeout = null;
+    if (payload.agentId === state.currentAgentId) {
+      if (state.messageTimeout) {
+        clearTimeout(state.messageTimeout);
+        state.messageTimeout = null;
       }
 
-      messages = messages.filter((m) => !m.id.includes('-sending') && !m.id.includes('-processing'));
+      state.messages = state.messages.filter((m) => !m.id.includes('-sending') && !m.id.includes('-processing'));
       renderMessages();
       refreshComposerState();
     } else if (targetSessionId) {
       const sessionMessages = getMessagesForSession(targetSessionId).filter(
         (m) => !m.id.includes('-sending') && !m.id.includes('-processing')
       );
-      messagesBySession[targetSessionId] = sessionMessages;
+      state.messagesBySession[targetSessionId] = sessionMessages;
       void saveSessionMessages();
       renderSessionList();
       refreshComposerState();
@@ -337,9 +315,9 @@ function setupTauriEventListeners() {
 
   onAgentError((payload) => {
     if (payload.agentId) {
-      delete inflightSessionByAgent[payload.agentId];
+      delete state.inflightSessionByAgent[payload.agentId];
     }
-    if (payload.agentId && payload.agentId !== currentAgentId) {
+    if (payload.agentId && payload.agentId !== state.currentAgentId) {
       return;
     }
     showError(`错误: ${payload.error || '未知错误'}`);
@@ -386,12 +364,12 @@ function appendStreamMessage(
   if (role === 'assistant') {
     syncAgentModelFromAboutContent(agentId, lastMessage.content);
   }
-  messagesBySession[sessionId] = sessionMessages;
+  state.messagesBySession[sessionId] = sessionMessages;
   touchSessionById(sessionId, sessionMessages);
   void saveSessionMessages();
 
-  if (sessionId === currentSessionId) {
-    messages = sessionMessages;
+  if (sessionId === state.currentSessionId) {
+    state.messages = sessionMessages;
     renderMessages();
     scrollToBottom();
   } else {
@@ -406,12 +384,12 @@ function applyAgentRegistry(agentId: string, rawCommands: unknown[] | undefined,
     return;
   }
 
-  registryByAgent[agentId] = {
+  state.registryByAgent[agentId] = {
     commands,
     mcpServers,
   };
 
-  if (agentId === currentAgentId) {
+  if (agentId === state.currentAgentId) {
     updateSlashCommandMenu();
   }
 }
@@ -426,7 +404,7 @@ function applyAgentModelRegistry(
     : [];
 
   if (models.length > 0) {
-    modelOptionsCacheByAgent[agentId] = models;
+    state.modelOptionsCacheByAgent[agentId] = models;
   }
 
   const currentModel =
@@ -434,7 +412,7 @@ function applyAgentModelRegistry(
       ? rawCurrentModel.trim()
       : null;
 
-  const agent = agents.find((item) => item.id === agentId);
+  const agent = state.agents.find((item) => item.id === agentId);
   if (!agent) {
     return;
   }
@@ -445,10 +423,10 @@ function applyAgentModelRegistry(
     renderAgentList();
   }
 
-  if (currentAgentId === agentId) {
+  if (state.currentAgentId === agentId) {
     updateCurrentAgentModelUI();
-    if (modelSelectorOpen) {
-      renderCurrentAgentModelMenu(agent, modelOptionsCacheByAgent[agentId] || []);
+    if (state.modelSelectorOpen) {
+      renderCurrentAgentModelMenu(agent, state.modelOptionsCacheByAgent[agentId] || []);
     }
   }
 }
@@ -460,9 +438,9 @@ function applyAcpSessionBinding(agentId: string, acpSessionId: string) {
   }
 
   const preferredSessionId =
-    inflightSessionByAgent[agentId] ||
-    (agentId === currentAgentId && currentSessionId ? currentSessionId : null);
-  const sessionList = sessionsByAgent[agentId] || [];
+    state.inflightSessionByAgent[agentId] ||
+    (agentId === state.currentAgentId && state.currentSessionId ? state.currentSessionId : null);
+  const sessionList = state.sessionsByAgent[agentId] || [];
 
   let targetSession = preferredSessionId
     ? sessionList.find((item) => item.id === preferredSessionId)
@@ -488,7 +466,7 @@ function applyAcpSessionBinding(agentId: string, acpSessionId: string) {
     targetSession.source = 'local';
   }
   void saveSessions();
-  if (targetSession.agentId === currentAgentId) {
+  if (targetSession.agentId === state.currentAgentId) {
     renderSessionList();
   }
 }
@@ -598,7 +576,7 @@ function getSlashQueryFromInput(): string | null {
 function buildSlashMenuItemsForCurrentAgent(): SlashMenuItem[] {
   const items: SlashMenuItem[] = [];
   const seen = new Set<string>();
-  const currentRegistry = currentAgentId ? registryByAgent[currentAgentId] : undefined;
+  const currentRegistry = state.currentAgentId ? state.registryByAgent[state.currentAgentId] : undefined;
 
   const pushUnique = (item: SlashMenuItem) => {
     const dedupeKey = item.insertText.toLowerCase();
@@ -653,7 +631,7 @@ function buildSlashMenuItemsForCurrentAgent(): SlashMenuItem[] {
 
 function updateSlashCommandMenu() {
   const query = getSlashQueryFromInput();
-  if (query === null || messageInputEl.disabled || !currentAgentId) {
+  if (query === null || messageInputEl.disabled || !state.currentAgentId) {
     hideSlashCommandMenu();
     return;
   }
@@ -664,26 +642,26 @@ function updateSlashCommandMenu() {
       ? candidateItems
       : candidateItems.filter((item) => item.searchable.includes(query));
 
-  slashMenuItems = filteredItems.slice(0, 12);
-  if (slashMenuItems.length === 0) {
-    slashMenuVisible = true;
-    slashMenuActiveIndex = 0;
+  state.slashMenuItems = filteredItems.slice(0, 12);
+  if (state.slashMenuItems.length === 0) {
+    state.slashMenuVisible = true;
+    state.slashMenuActiveIndex = 0;
     slashCommandMenuEl.classList.remove('hidden');
     slashCommandMenuEl.innerHTML = `<div class="slash-command-empty">未找到匹配命令：/${escapeHtml(query)}</div>`;
     return;
   }
 
-  if (!slashMenuVisible) {
-    slashMenuActiveIndex = 0;
-  } else if (slashMenuActiveIndex >= slashMenuItems.length) {
-    slashMenuActiveIndex = slashMenuItems.length - 1;
+  if (!state.slashMenuVisible) {
+    state.slashMenuActiveIndex = 0;
+  } else if (state.slashMenuActiveIndex >= state.slashMenuItems.length) {
+    state.slashMenuActiveIndex = state.slashMenuItems.length - 1;
   }
 
-  slashMenuVisible = true;
+  state.slashMenuVisible = true;
   slashCommandMenuEl.classList.remove('hidden');
-  slashCommandMenuEl.innerHTML = slashMenuItems
+  slashCommandMenuEl.innerHTML = state.slashMenuItems
     .map((item, index) => {
-      const activeClass = index === slashMenuActiveIndex ? 'active' : '';
+      const activeClass = index === state.slashMenuActiveIndex ? 'active' : '';
       const desc = escapeHtml(item.description || (item.category === 'mcp' ? 'MCP 服务' : '命令'));
       return `
       <button type="button" class="slash-command-item ${activeClass}" data-index="${index}">
@@ -700,20 +678,20 @@ function updateSlashCommandMenu() {
 }
 
 function hideSlashCommandMenu() {
-  slashMenuVisible = false;
-  slashMenuItems = [];
-  slashMenuActiveIndex = 0;
+  state.slashMenuVisible = false;
+  state.slashMenuItems = [];
+  state.slashMenuActiveIndex = 0;
   slashCommandMenuEl.classList.add('hidden');
   slashCommandMenuEl.innerHTML = '';
 }
 
 function ensureSlashMenuActiveItemVisible() {
-  if (!slashMenuVisible || slashMenuItems.length === 0) {
+  if (!state.slashMenuVisible || state.slashMenuItems.length === 0) {
     return;
   }
 
   const activeItemEl = slashCommandMenuEl.querySelector(
-    `.slash-command-item[data-index="${slashMenuActiveIndex}"]`
+    `.slash-command-item[data-index="${state.slashMenuActiveIndex}"]`
   ) as HTMLButtonElement | null;
 
   if (!activeItemEl) {
@@ -736,16 +714,16 @@ function ensureSlashMenuActiveItemVisible() {
 }
 
 function moveSlashMenuSelection(offset: number) {
-  if (slashMenuItems.length === 0) {
+  if (state.slashMenuItems.length === 0) {
     return;
   }
-  const total = slashMenuItems.length;
-  slashMenuActiveIndex = (slashMenuActiveIndex + offset + total) % total;
+  const total = state.slashMenuItems.length;
+  state.slashMenuActiveIndex = (state.slashMenuActiveIndex + offset + total) % total;
   updateSlashCommandMenu();
 }
 
 function applySlashMenuItem(index: number): boolean {
-  const item = slashMenuItems[index];
+  const item = state.slashMenuItems[index];
   if (!item) {
     return false;
   }
@@ -759,7 +737,7 @@ function applySlashMenuItem(index: number): boolean {
 }
 
 function handleSlashMenuKeydown(event: KeyboardEvent): boolean {
-  if (!slashMenuVisible) {
+  if (!state.slashMenuVisible) {
     return false;
   }
 
@@ -783,20 +761,20 @@ function handleSlashMenuKeydown(event: KeyboardEvent): boolean {
 
   if (event.key === 'Tab') {
     event.preventDefault();
-    if (slashMenuItems.length === 0) {
+    if (state.slashMenuItems.length === 0) {
       hideSlashCommandMenu();
       return true;
     }
-    return applySlashMenuItem(slashMenuActiveIndex);
+    return applySlashMenuItem(state.slashMenuActiveIndex);
   }
 
   if (event.key === 'Enter' && !event.shiftKey) {
-    if (slashMenuItems.length === 0) {
+    if (state.slashMenuItems.length === 0) {
       hideSlashCommandMenu();
       return false;
     }
     event.preventDefault();
-    return applySlashMenuItem(slashMenuActiveIndex);
+    return applySlashMenuItem(state.slashMenuActiveIndex);
   }
 
   return false;
@@ -807,9 +785,9 @@ function setupEventListeners() {
   console.log('Setting up event listeners...');
 
   themeToggleBtnEl.addEventListener('click', () => {
-    currentTheme = THEME_CYCLE[currentTheme];
-    applyTheme(currentTheme);
-    localStorage.setItem(THEME_STORAGE_KEY, currentTheme);
+    state.currentTheme = THEME_CYCLE[state.currentTheme];
+    applyTheme(state.currentTheme);
+    localStorage.setItem(THEME_STORAGE_KEY, state.currentTheme);
   });
 
   addAgentBtnEl.addEventListener('click', () => {
@@ -950,7 +928,7 @@ function hideModal() {
 }
 
 function onDocumentClick(event: MouseEvent) {
-  if (!modelSelectorOpen) {
+  if (!state.modelSelectorOpen) {
     return;
   }
   const target = event.target as HTMLElement;
@@ -964,11 +942,11 @@ function onDocumentClick(event: MouseEvent) {
 }
 
 function canUseConversationQuickAction(): boolean {
-  if (!currentAgentId || !currentSessionId) {
+  if (!state.currentAgentId || !state.currentSessionId) {
     return false;
   }
-  const agent = agents.find((item) => item.id === currentAgentId);
-  return Boolean(agent && agent.status === 'connected' && !inflightSessionByAgent[agent.id]);
+  const agent = state.agents.find((item) => item.id === state.currentAgentId);
+  return Boolean(agent && agent.status === 'connected' && !state.inflightSessionByAgent[agent.id]);
 }
 
 async function sendPresetMessage(content: string, blockedHint: string) {
@@ -994,7 +972,7 @@ async function sendQuickReply(text: string) {
 }
 
 async function retryUserMessageById(messageId: string) {
-  const userMessage = messages.find((item) => item.id === messageId && item.role === 'user');
+  const userMessage = state.messages.find((item) => item.id === messageId && item.role === 'user');
   if (!userMessage) {
     showError('未找到可重试的问题');
     return;
@@ -1178,31 +1156,31 @@ function buildArtifactPreviewCacheKey(agentId: string, normalizedPath: string): 
 }
 
 function touchArtifactCacheKey(key: string) {
-  const existingIndex = artifactPreviewCacheOrder.indexOf(key);
+  const existingIndex = state.artifactPreviewCacheOrder.indexOf(key);
   if (existingIndex >= 0) {
-    artifactPreviewCacheOrder.splice(existingIndex, 1);
+    state.artifactPreviewCacheOrder.splice(existingIndex, 1);
   }
-  artifactPreviewCacheOrder.push(key);
+  state.artifactPreviewCacheOrder.push(key);
 }
 
 function setArtifactPreviewCache(key: string, html: string) {
-  artifactPreviewCacheByKey.set(key, html);
+  state.artifactPreviewCacheByKey.set(key, html);
   touchArtifactCacheKey(key);
 
-  while (artifactPreviewCacheOrder.length > ARTIFACT_PREVIEW_CACHE_LIMIT) {
-    const oldestKey = artifactPreviewCacheOrder.shift();
+  while (state.artifactPreviewCacheOrder.length > ARTIFACT_PREVIEW_CACHE_LIMIT) {
+    const oldestKey = state.artifactPreviewCacheOrder.shift();
     if (!oldestKey) {
       continue;
     }
-    artifactPreviewCacheByKey.delete(oldestKey);
-    if (artifactPreviewLastKey === oldestKey) {
-      artifactPreviewLastKey = null;
+    state.artifactPreviewCacheByKey.delete(oldestKey);
+    if (state.artifactPreviewLastKey === oldestKey) {
+      state.artifactPreviewLastKey = null;
     }
   }
 }
 
 function getArtifactPreviewCache(key: string): string | null {
-  const payload = artifactPreviewCacheByKey.get(key);
+  const payload = state.artifactPreviewCacheByKey.get(key);
   if (!payload) {
     return null;
   }
@@ -1250,7 +1228,7 @@ function createArtifactPreviewTimeoutPromise(): Promise<never> {
 }
 
 function shouldIgnoreArtifactResponse(requestToken: number, expectedPath: string): boolean {
-  if (artifactPreviewRequestToken === requestToken) {
+  if (state.artifactPreviewRequestToken === requestToken) {
     return false;
   }
   if (artifactPreviewModalEl.classList.contains('hidden')) {
@@ -1262,14 +1240,14 @@ function shouldIgnoreArtifactResponse(requestToken: number, expectedPath: string
 
 function clearArtifactPreviewCacheForAgent(agentId: string) {
   const prefix = `${agentId}::`;
-  for (const key of Array.from(artifactPreviewCacheByKey.keys())) {
+  for (const key of Array.from(state.artifactPreviewCacheByKey.keys())) {
     if (!key.startsWith(prefix)) {
       continue;
     }
-    artifactPreviewCacheByKey.delete(key);
-    artifactPreviewCacheOrder = artifactPreviewCacheOrder.filter((item) => item !== key);
-    if (artifactPreviewLastKey === key) {
-      artifactPreviewLastKey = null;
+    state.artifactPreviewCacheByKey.delete(key);
+    state.artifactPreviewCacheOrder = state.artifactPreviewCacheOrder.filter((item) => item !== key);
+    if (state.artifactPreviewLastKey === key) {
+      state.artifactPreviewLastKey = null;
     }
   }
 }
@@ -1283,13 +1261,13 @@ function warmUpArtifactPreviewFrame() {
 }
 
 function closeArtifactPreviewModal() {
-  artifactPreviewRequestToken += 1;
+  state.artifactPreviewRequestToken += 1;
   artifactPreviewModalEl.classList.add('hidden');
   artifactPreviewPathEl.textContent = '';
 }
 
 async function openArtifactPreview(path: string) {
-  const agent = currentAgentId ? agents.find((item) => item.id === currentAgentId) : null;
+  const agent = state.currentAgentId ? state.agents.find((item) => item.id === state.currentAgentId) : null;
   if (!agent || agent.status !== 'connected') {
     showError('请先连接当前 Agent，再预览 HTML Artifact');
     return;
@@ -1305,7 +1283,7 @@ async function openArtifactPreview(path: string) {
   artifactPreviewModalEl.classList.remove('hidden');
   artifactPreviewPathEl.textContent = normalizedPath;
 
-  if (artifactPreviewLastKey === cacheKey) {
+  if (state.artifactPreviewLastKey === cacheKey) {
     return;
   }
 
@@ -1314,10 +1292,10 @@ async function openArtifactPreview(path: string) {
     const cachedEntry = decodeArtifactPreviewCacheEntry(cachedHtml);
     if (cachedEntry) {
       applyArtifactPreviewContent(cachedEntry.mode, cachedEntry.value);
-      artifactPreviewLastKey = cacheKey;
+      state.artifactPreviewLastKey = cacheKey;
       return;
     }
-    artifactPreviewCacheByKey.delete(cacheKey);
+    state.artifactPreviewCacheByKey.delete(cacheKey);
   }
 
   applyArtifactPreviewContent(
@@ -1328,16 +1306,16 @@ async function openArtifactPreview(path: string) {
     )
   );
 
-  const requestToken = artifactPreviewRequestToken + 1;
-  artifactPreviewRequestToken = requestToken;
+  const requestToken = state.artifactPreviewRequestToken + 1;
+  state.artifactPreviewRequestToken = requestToken;
   const hardTimeoutId = window.setTimeout(() => {
     if (shouldIgnoreArtifactResponse(requestToken, normalizedPath)) {
       return;
     }
-    if (artifactPreviewLastKey === cacheKey) {
+    if (state.artifactPreviewLastKey === cacheKey) {
       return;
     }
-    artifactPreviewLastKey = null;
+    state.artifactPreviewLastKey = null;
     applyArtifactPreviewContent(
       'html',
       renderArtifactPlaceholder(
@@ -1359,7 +1337,7 @@ async function openArtifactPreview(path: string) {
     }
 
     setArtifactPreviewCache(cacheKey, encodeArtifactPreviewCacheEntry('html', html));
-    artifactPreviewLastKey = cacheKey;
+    state.artifactPreviewLastKey = cacheKey;
     applyArtifactPreviewContent('html', html);
     return;
   } catch (error) {
@@ -1378,7 +1356,7 @@ async function openArtifactPreview(path: string) {
 
     const assetUrl = convertFileSrc(absolutePath);
     setArtifactPreviewCache(cacheKey, encodeArtifactPreviewCacheEntry('url', assetUrl));
-    artifactPreviewLastKey = cacheKey;
+    state.artifactPreviewLastKey = cacheKey;
     applyArtifactPreviewContent('url', assetUrl);
   } catch (resolveError) {
     if (shouldIgnoreArtifactResponse(requestToken, normalizedPath)) {
@@ -1388,7 +1366,7 @@ async function openArtifactPreview(path: string) {
       return;
     }
 
-    artifactPreviewLastKey = null;
+    state.artifactPreviewLastKey = null;
     const readMessage = readError instanceof Error ? readError.message : String(readError);
     const resolveMessage = resolveError instanceof Error ? resolveError.message : String(resolveError);
     applyArtifactPreviewContent(
@@ -1458,29 +1436,29 @@ function onToolCallsClick(event: MouseEvent) {
 }
 
 function closeCurrentAgentModelMenu() {
-  modelSelectorOpen = false;
+  state.modelSelectorOpen = false;
   currentAgentModelBtnEl.setAttribute('aria-expanded', 'false');
   currentAgentModelMenuEl.classList.add('hidden');
 }
 
 async function toggleCurrentAgentModelMenu() {
-  const agent = currentAgentId ? agents.find((item) => item.id === currentAgentId) : null;
+  const agent = state.currentAgentId ? state.agents.find((item) => item.id === state.currentAgentId) : null;
   if (!agent || agent.status !== 'connected') {
     return;
   }
 
-  if (modelSelectorOpen) {
+  if (state.modelSelectorOpen) {
     closeCurrentAgentModelMenu();
     return;
   }
 
-  modelSelectorOpen = true;
+  state.modelSelectorOpen = true;
   currentAgentModelBtnEl.setAttribute('aria-expanded', 'true');
   currentAgentModelMenuEl.classList.remove('hidden');
   currentAgentModelMenuEl.innerHTML = '<div class="model-selector-state">正在加载模型列表...</div>';
 
   const options = await loadAgentModelOptions(agent);
-  if (!modelSelectorOpen || currentAgentId !== agent.id) {
+  if (!state.modelSelectorOpen || state.currentAgentId !== agent.id) {
     return;
   }
   renderCurrentAgentModelMenu(agent, options);
@@ -1534,7 +1512,7 @@ async function onCurrentAgentModelMenuClick(event: MouseEvent) {
   }
 
   const modelName = optionBtn.dataset.modelValue?.trim();
-  const agent = currentAgentId ? agents.find((item) => item.id === currentAgentId) : null;
+  const agent = state.currentAgentId ? state.agents.find((item) => item.id === state.currentAgentId) : null;
   if (!agent || !modelName || agent.status !== 'connected') {
     return;
   }
@@ -1555,7 +1533,7 @@ async function onCurrentAgentModelMenuClick(event: MouseEvent) {
 }
 
 function updateCurrentAgentModelUI() {
-  const agent = currentAgentId ? agents.find((item) => item.id === currentAgentId) : null;
+  const agent = state.currentAgentId ? state.agents.find((item) => item.id === state.currentAgentId) : null;
   if (!agent) {
     currentAgentModelBtnEl.disabled = true;
     currentAgentModelTextEl.textContent = '模型：未连接';
@@ -1563,7 +1541,7 @@ function updateCurrentAgentModelUI() {
     return;
   }
 
-  if (modelSwitchingAgentId === agent.id) {
+  if (state.modelSwitchingAgentId === agent.id) {
     currentAgentModelBtnEl.disabled = true;
     currentAgentModelTextEl.textContent = '模型：切换中...';
     return;
@@ -1596,7 +1574,7 @@ function normalizeToolCallItem(raw: ToolCall): ToolCall {
 }
 
 function mergeToolCalls(agentId: string, incoming: ToolCall[]) {
-  const current = toolCallsByAgent[agentId] || [];
+  const current = state.toolCallsByAgent[agentId] || [];
   const merged = [...current];
 
   for (const rawItem of incoming) {
@@ -1617,15 +1595,15 @@ function mergeToolCalls(agentId: string, incoming: ToolCall[]) {
     };
   }
 
-  toolCallsByAgent[agentId] = merged;
-  if (agentId === currentAgentId) {
+  state.toolCallsByAgent[agentId] = merged;
+  if (agentId === state.currentAgentId) {
     showToolCalls(merged);
   }
 }
 
 function resetToolCallsForAgent(agentId: string) {
-  delete toolCallsByAgent[agentId];
-  if (agentId === currentAgentId) {
+  delete state.toolCallsByAgent[agentId];
+  if (agentId === state.currentAgentId) {
     toolCallsListEl.innerHTML = '';
     toolCallsPanelEl.classList.add('hidden');
   }
@@ -1685,11 +1663,11 @@ function onSessionListClick(event: MouseEvent) {
 }
 
 async function clearCurrentAgentSessions() {
-  if (!currentAgentId) {
+  if (!state.currentAgentId) {
     showError('请先选择一个 Agent');
     return;
   }
-  const agent = agents.find((item) => item.id === currentAgentId);
+  const agent = state.agents.find((item) => item.id === state.currentAgentId);
   if (!agent) {
     showError('当前 Agent 不存在');
     return;
@@ -1706,22 +1684,22 @@ async function clearCurrentAgentSessions() {
     return;
   }
 
-  const removedSessions = sessionsByAgent[currentAgentId] || [];
+  const removedSessions = state.sessionsByAgent[state.currentAgentId] || [];
   for (const session of removedSessions) {
-    delete messagesBySession[session.id];
+    delete state.messagesBySession[session.id];
   }
-  sessionsByAgent[currentAgentId] = [];
-  currentSessionId = null;
-  messages = [];
-  delete inflightSessionByAgent[currentAgentId];
-  clearArtifactPreviewCacheForAgent(currentAgentId);
+  state.sessionsByAgent[state.currentAgentId] = [];
+  state.currentSessionId = null;
+  state.messages = [];
+  delete state.inflightSessionByAgent[state.currentAgentId];
+  clearArtifactPreviewCacheForAgent(state.currentAgentId);
   closeArtifactPreviewModal();
 
-  ensureAgentHasSessions(currentAgentId);
-  const nextSessions = getSessionsForAgent(currentAgentId);
+  ensureAgentHasSessions(state.currentAgentId);
+  const nextSessions = getSessionsForAgent(state.currentAgentId);
   if (nextSessions.length > 0) {
-    currentSessionId = nextSessions[0].id;
-    messages = getMessagesForSession(currentSessionId);
+    state.currentSessionId = nextSessions[0].id;
+    state.messages = getMessagesForSession(state.currentSessionId);
   }
 
   await saveSessions();
@@ -1755,7 +1733,7 @@ async function addAgent(name: string, iflowPath: string, workspacePath: string) 
       port: result.port,
     };
 
-    agents.push(agent);
+    state.agents.push(agent);
     ensureAgentHasSessions(agentId);
 
     await saveAgents();
@@ -1879,7 +1857,7 @@ async function syncIflowHistorySessions(agent: Agent): Promise<void> {
     const historyList = Array.isArray(histories) ? histories : [];
 
     ensureAgentHasSessions(agent.id);
-    const sessionList = sessionsByAgent[agent.id] || [];
+    const sessionList = state.sessionsByAgent[agent.id] || [];
     let changed = false;
     let messagesChanged = false;
     const liveHistorySessionIds = new Set<string>();
@@ -1959,31 +1937,31 @@ async function syncIflowHistorySessions(agent: Agent): Promise<void> {
     });
     if (staleHistorySessions.length > 0) {
       const staleSessionIds = new Set(staleHistorySessions.map((item) => item.id));
-      sessionsByAgent[agent.id] = sessionList.filter((item) => !staleSessionIds.has(item.id));
+      state.sessionsByAgent[agent.id] = sessionList.filter((item) => !staleSessionIds.has(item.id));
       for (const staleSession of staleHistorySessions) {
-        delete messagesBySession[staleSession.id];
+        delete state.messagesBySession[staleSession.id];
       }
       changed = true;
       messagesChanged = true;
     } else {
-      sessionsByAgent[agent.id] = sessionList;
+      state.sessionsByAgent[agent.id] = sessionList;
     }
 
-    const normalizedSessionList = sessionsByAgent[agent.id] || [];
+    const normalizedSessionList = state.sessionsByAgent[agent.id] || [];
     const dedupedSessions = dedupeSessionsByIdentity(normalizedSessionList);
     if (dedupedSessions.length !== normalizedSessionList.length) {
-      sessionsByAgent[agent.id] = dedupedSessions;
+      state.sessionsByAgent[agent.id] = dedupedSessions;
       changed = true;
       const liveIds = new Set(dedupedSessions.map((item) => item.id));
-      for (const sessionId of Object.keys(messagesBySession)) {
+      for (const sessionId of Object.keys(state.messagesBySession)) {
         if (!liveIds.has(sessionId) && sessionId.startsWith(`iflowlog-${agent.id}-`)) {
-          delete messagesBySession[sessionId];
+          delete state.messagesBySession[sessionId];
           messagesChanged = true;
         }
       }
     }
 
-    if ((sessionsByAgent[agent.id] || []).length === 0) {
+    if ((state.sessionsByAgent[agent.id] || []).length === 0) {
       ensureAgentHasSessions(agent.id);
       changed = true;
     }
@@ -1997,13 +1975,13 @@ async function syncIflowHistorySessions(agent: Agent): Promise<void> {
       await saveSessionMessages();
     }
 
-    if (currentAgentId === agent.id) {
+    if (state.currentAgentId === agent.id) {
       const activeSessions = getSessionsForAgent(agent.id);
       const currentStillExists =
-        Boolean(currentSessionId) && activeSessions.some((item) => item.id === currentSessionId);
+        Boolean(state.currentSessionId) && activeSessions.some((item) => item.id === state.currentSessionId);
       if (!currentStillExists) {
-        currentSessionId = null;
-        messages = [];
+        state.currentSessionId = null;
+        state.messages = [];
         const fallbackSession = activeSessions[0];
         if (fallbackSession) {
           selectSession(fallbackSession.id);
@@ -2031,15 +2009,15 @@ async function loadIflowHistoryMessagesForSession(session: Session): Promise<voi
       if (session.acpSessionId !== inferred) {
         session.acpSessionId = inferred;
         void saveSessions();
-        if (currentAgentId === session.agentId) {
+        if (state.currentAgentId === session.agentId) {
           renderSessionList();
         }
       }
     }
   }
   if (!isIflowHistorySessionId(effectiveSessionId)) {
-    if (currentSessionId === session.id) {
-      messages = [
+    if (state.currentSessionId === session.id) {
+      state.messages = [
         {
           id: `msg-${Date.now()}-history-invalid-session-id`,
           role: 'system',
@@ -2052,7 +2030,7 @@ async function loadIflowHistoryMessagesForSession(session: Session): Promise<voi
     }
     return;
   }
-  const agent = agents.find((item) => item.id === session.agentId);
+  const agent = state.agents.find((item) => item.id === session.agentId);
   if (!agent) {
     return;
   }
@@ -2064,15 +2042,15 @@ async function loadIflowHistoryMessagesForSession(session: Session): Promise<voi
       .flatMap((item) => expandIflowHistoryMessageRecord(item))
       .filter((item) => item.content.trim().length > 0);
 
-    messagesBySession[session.id] = normalized;
+    state.messagesBySession[session.id] = normalized;
     if (session.source === 'iflow-log') {
       session.messageCountHint = normalized.filter(
         (item) => item.role === 'user' || item.role === 'assistant'
       ).length;
     }
 
-    if (currentSessionId === session.id) {
-      messages = normalized;
+    if (state.currentSessionId === session.id) {
+      state.messages = normalized;
       renderMessages();
       scrollToBottom();
       refreshComposerState();
@@ -2086,29 +2064,29 @@ async function loadIflowHistoryMessagesForSession(session: Session): Promise<voi
       session.source === 'iflow-log' && detail.includes('Session file not found for');
 
     if (isMissingHistoryFile) {
-      const scopedSessions = sessionsByAgent[session.agentId] || [];
+      const scopedSessions = state.sessionsByAgent[session.agentId] || [];
       const filtered = scopedSessions.filter((item) => item.id !== session.id);
       if (filtered.length !== scopedSessions.length) {
-        sessionsByAgent[session.agentId] = filtered;
-        delete messagesBySession[session.id];
+        state.sessionsByAgent[session.agentId] = filtered;
+        delete state.messagesBySession[session.id];
 
-        if (sessionsByAgent[session.agentId].length === 0) {
+        if (state.sessionsByAgent[session.agentId].length === 0) {
           const fallback = createSession(session.agentId, '默认会话');
-          sessionsByAgent[session.agentId].push(fallback);
-          messagesBySession[fallback.id] = [];
+          state.sessionsByAgent[session.agentId].push(fallback);
+          state.messagesBySession[fallback.id] = [];
         }
 
         await saveSessions();
         await saveSessionMessages();
       }
 
-      if (currentAgentId === session.agentId) {
+      if (state.currentAgentId === session.agentId) {
         const scoped = getSessionsForAgent(session.agentId);
         const currentStillExists =
-          Boolean(currentSessionId) && scoped.some((item) => item.id === currentSessionId);
+          Boolean(state.currentSessionId) && scoped.some((item) => item.id === state.currentSessionId);
         if (!currentStillExists) {
-          currentSessionId = null;
-          messages = [];
+          state.currentSessionId = null;
+          state.messages = [];
           const fallbackSession = scoped[0];
           if (fallbackSession) {
             selectSession(fallbackSession.id);
@@ -2126,8 +2104,8 @@ async function loadIflowHistoryMessagesForSession(session: Session): Promise<voi
       return;
     }
 
-    if (currentSessionId === session.id) {
-      messages = [
+    if (state.currentSessionId === session.id) {
+      state.messages = [
         {
           id: `msg-${Date.now()}-history-load-failed`,
           role: 'system',
@@ -2145,11 +2123,11 @@ async function loadIflowHistoryMessagesForSession(session: Session): Promise<voi
 // 选择 Agent
 function selectAgent(agentId: string) {
   closeCurrentAgentModelMenu();
-  if (currentAgentId && currentAgentId !== agentId) {
+  if (state.currentAgentId && state.currentAgentId !== agentId) {
     closeArtifactPreviewModal();
   }
-  currentAgentId = agentId;
-  const agent = agents.find((a) => a.id === agentId);
+  state.currentAgentId = agentId;
+  const agent = state.agents.find((a) => a.id === agentId);
   if (!agent) {
     updateCurrentAgentModelUI();
     return;
@@ -2167,8 +2145,8 @@ function selectAgent(agentId: string) {
   if (sessionList.length > 0) {
     selectSession(sessionList[0].id);
   } else {
-    currentSessionId = null;
-    messages = [];
+    state.currentSessionId = null;
+    state.messages = [];
     renderMessages();
     renderSessionList();
   }
@@ -2176,7 +2154,7 @@ function selectAgent(agentId: string) {
   renderAgentList();
   updateCurrentAgentModelUI();
   updateConnectionStatus(isConnected);
-  const existingToolCalls = toolCallsByAgent[agentId] || [];
+  const existingToolCalls = state.toolCallsByAgent[agentId] || [];
   if (existingToolCalls.length > 0) {
     showToolCalls(existingToolCalls);
   } else {
@@ -2186,7 +2164,7 @@ function selectAgent(agentId: string) {
   if (isConnected) {
     void syncIflowHistorySessions(agent);
     void loadAgentModelOptions(agent).then(() => {
-      if (currentAgentId === agent.id) {
+      if (state.currentAgentId === agent.id) {
         updateCurrentAgentModelUI();
       }
     });
@@ -2198,7 +2176,7 @@ async function deleteAgent(agentId: string) {
     return;
   }
 
-  const agent = agents.find((a) => a.id === agentId);
+  const agent = state.agents.find((a) => a.id === agentId);
   if (agent?.status === 'connected') {
     try {
       await disconnectAgent(agentId);
@@ -2207,28 +2185,28 @@ async function deleteAgent(agentId: string) {
     }
   }
 
-  agents = agents.filter((a) => a.id !== agentId);
-  if (modelSwitchingAgentId === agentId) {
-    modelSwitchingAgentId = null;
+  state.agents = state.agents.filter((a) => a.id !== agentId);
+  if (state.modelSwitchingAgentId === agentId) {
+    state.modelSwitchingAgentId = null;
   }
-  delete inflightSessionByAgent[agentId];
-  delete registryByAgent[agentId];
-  delete toolCallsByAgent[agentId];
-  delete modelOptionsCacheByAgent[agentId];
+  delete state.inflightSessionByAgent[agentId];
+  delete state.registryByAgent[agentId];
+  delete state.toolCallsByAgent[agentId];
+  delete state.modelOptionsCacheByAgent[agentId];
   clearArtifactPreviewCacheForAgent(agentId);
 
-  const removedSessions = sessionsByAgent[agentId] || [];
-  delete sessionsByAgent[agentId];
+  const removedSessions = state.sessionsByAgent[agentId] || [];
+  delete state.sessionsByAgent[agentId];
   for (const session of removedSessions) {
-    delete messagesBySession[session.id];
+    delete state.messagesBySession[session.id];
   }
 
-  if (currentAgentId === agentId) {
+  if (state.currentAgentId === agentId) {
     closeCurrentAgentModelMenu();
     closeArtifactPreviewModal();
-    currentAgentId = null;
-    currentSessionId = null;
-    messages = [];
+    state.currentAgentId = null;
+    state.currentSessionId = null;
+    state.messages = [];
     renderMessages();
     toolCallsPanelEl.classList.add('hidden');
     currentAgentNameEl.textContent = '选择一个 Agent';
@@ -2246,11 +2224,11 @@ async function deleteAgent(agentId: string) {
 }
 
 async function renameAgent(agentId: string) {
-  const agent = agents.find((a) => a.id === agentId);
+  const agent = state.agents.find((a) => a.id === agentId);
   if (!agent) {
     return;
   }
-  renamingAgentId = agent.id;
+  state.renamingAgentId = agent.id;
   renameAgentNameInputEl.value = agent.name;
   renameAgentModalEl.classList.remove('hidden');
   window.requestAnimationFrame(() => {
@@ -2260,16 +2238,16 @@ async function renameAgent(agentId: string) {
 }
 
 function hideRenameAgentModal() {
-  renamingAgentId = null;
+  state.renamingAgentId = null;
   renameAgentModalEl.classList.add('hidden');
 }
 
 async function submitRenameAgent() {
-  if (!renamingAgentId) {
+  if (!state.renamingAgentId) {
     return;
   }
 
-  const agent = agents.find((a) => a.id === renamingAgentId);
+  const agent = state.agents.find((a) => a.id === state.renamingAgentId);
   if (!agent) {
     hideRenameAgentModal();
     return;
@@ -2290,7 +2268,7 @@ async function submitRenameAgent() {
 
   agent.name = normalizedName;
   await saveAgents();
-  if (currentAgentId === agent.id) {
+  if (state.currentAgentId === agent.id) {
     currentAgentNameEl.textContent = agent.name;
   }
   renderAgentList();
@@ -2300,10 +2278,10 @@ async function submitRenameAgent() {
 
 // 渲染 Agent 列表
 function renderAgentList() {
-  agentListEl.innerHTML = agents
+  agentListEl.innerHTML = state.agents
     .map(
       (agent) => `
-    <div class="agent-item ${agent.id === currentAgentId ? 'active' : ''}" data-agent-id="${agent.id}">
+    <div class="agent-item ${agent.id === state.currentAgentId ? 'active' : ''}" data-agent-id="${agent.id}">
       <div class="agent-icon">iF</div>
       <div class="agent-info">
         <div class="agent-name">${escapeHtml(agent.name)}</div>
@@ -2327,12 +2305,12 @@ function renderAgentList() {
 }
 
 function renderSessionList() {
-  if (!currentAgentId) {
+  if (!state.currentAgentId) {
     sessionListEl.innerHTML = '<div class="session-empty">选择 Agent 后显示会话历史</div>';
     return;
   }
 
-  const sessionList = getSessionsForAgent(currentAgentId);
+  const sessionList = getSessionsForAgent(state.currentAgentId);
   if (sessionList.length === 0) {
     sessionListEl.innerHTML = '<div class="session-empty">暂无会话，点击右上角「新建会话」</div>';
     return;
@@ -2340,10 +2318,10 @@ function renderSessionList() {
 
   sessionListEl.innerHTML = sessionList
     .map((session) => {
-      const loadedCount = (messagesBySession[session.id] || []).length;
+      const loadedCount = (state.messagesBySession[session.id] || []).length;
       const messageCount = loadedCount > 0 ? loadedCount : session.messageCountHint || 0;
       return `
-      <div class="session-item ${session.id === currentSessionId ? 'active' : ''}" data-session-id="${session.id}">
+      <div class="session-item ${session.id === state.currentSessionId ? 'active' : ''}" data-session-id="${session.id}">
         <div class="session-row">
           <div class="session-title">${escapeHtml(session.title)}</div>
           <button class="btn-session-delete" data-action="delete-session" data-session-id="${session.id}" title="删除会话">×</button>
@@ -2356,20 +2334,20 @@ function renderSessionList() {
 }
 
 async function deleteSession(sessionId: string) {
-  if (!currentAgentId) {
+  if (!state.currentAgentId) {
     return;
   }
-  const agent = agents.find((item) => item.id === currentAgentId);
+  const agent = state.agents.find((item) => item.id === state.currentAgentId);
   if (!agent) {
     return;
   }
 
-  if (inflightSessionByAgent[currentAgentId] === sessionId) {
+  if (state.inflightSessionByAgent[state.currentAgentId] === sessionId) {
     showError('该会话正在回复中，暂时无法删除');
     return;
   }
 
-  const currentSessions = sessionsByAgent[currentAgentId] || [];
+  const currentSessions = state.sessionsByAgent[state.currentAgentId] || [];
   const targetSession = currentSessions.find((session) => session.id === sessionId);
   if (!targetSession) {
     return;
@@ -2393,21 +2371,21 @@ async function deleteSession(sessionId: string) {
     }
   }
 
-  sessionsByAgent[currentAgentId] = currentSessions.filter((session) => session.id !== sessionId);
-  delete messagesBySession[sessionId];
+  state.sessionsByAgent[state.currentAgentId] = currentSessions.filter((session) => session.id !== sessionId);
+  delete state.messagesBySession[sessionId];
 
-  if (sessionsByAgent[currentAgentId].length === 0) {
-    const fallback = createSession(currentAgentId, '默认会话');
-    sessionsByAgent[currentAgentId].push(fallback);
-    messagesBySession[fallback.id] = [];
+  if (state.sessionsByAgent[state.currentAgentId].length === 0) {
+    const fallback = createSession(state.currentAgentId, '默认会话');
+    state.sessionsByAgent[state.currentAgentId].push(fallback);
+    state.messagesBySession[fallback.id] = [];
   }
 
-  const ordered = getSessionsForAgent(currentAgentId);
+  const ordered = getSessionsForAgent(state.currentAgentId);
   const nextSessionId = ordered[0]?.id || null;
 
-  if (currentSessionId === sessionId) {
-    currentSessionId = null;
-    messages = [];
+  if (state.currentSessionId === sessionId) {
+    state.currentSessionId = null;
+    state.messages = [];
     if (nextSessionId) {
       selectSession(nextSessionId);
     } else {
@@ -2423,7 +2401,7 @@ async function deleteSession(sessionId: string) {
 }
 
 async function reconnectAgent(agentId: string) {
-  const agent = agents.find((a) => a.id === agentId);
+  const agent = state.agents.find((a) => a.id === agentId);
   if (!agent) {
     return;
   }
@@ -2486,7 +2464,6 @@ function updateConnectionStatus(connected: boolean) {
 }
 
 // 发送消息
-let messageTimeout: number | null = null;
 const MESSAGE_TIMEOUT_MS = 60000;
 
 function parseModelSlashCommand(content: string): ParsedModelSlashCommand | null {
@@ -2569,8 +2546,8 @@ function formatModelItem(item: ModelOption, index: number): string {
 }
 
 async function loadAgentModelOptions(agent: Agent, forceRefresh = false): Promise<ModelOption[]> {
-  if (!forceRefresh && modelOptionsCacheByAgent[agent.id] && modelOptionsCacheByAgent[agent.id].length > 0) {
-    return modelOptionsCacheByAgent[agent.id];
+  if (!forceRefresh && state.modelOptionsCacheByAgent[agent.id] && state.modelOptionsCacheByAgent[agent.id].length > 0) {
+    return state.modelOptionsCacheByAgent[agent.id];
   }
 
   try {
@@ -2579,8 +2556,8 @@ async function loadAgentModelOptions(agent: Agent, forceRefresh = false): Promis
       ? raw.map((item) => normalizeModelOption(item)).filter((item): item is ModelOption => Boolean(item))
       : [];
     if (normalized.length > 0) {
-      modelOptionsCacheByAgent[agent.id] = normalized;
-      if (currentAgentId === agent.id) {
+      state.modelOptionsCacheByAgent[agent.id] = normalized;
+      if (state.currentAgentId === agent.id) {
         updateCurrentAgentModelUI();
       }
     }
@@ -2640,12 +2617,12 @@ function formatModelList(models: ModelOption[], keyword?: string): string {
 }
 
 function commitSessionMessages(sessionId: string, sessionMessages: Message[]) {
-  messagesBySession[sessionId] = sessionMessages;
+  state.messagesBySession[sessionId] = sessionMessages;
   touchSessionById(sessionId, sessionMessages);
   void saveSessionMessages();
 
-  if (sessionId === currentSessionId) {
-    messages = sessionMessages;
+  if (sessionId === state.currentSessionId) {
+    state.messages = sessionMessages;
     renderMessages();
     scrollToBottom();
   } else {
@@ -2659,7 +2636,7 @@ function currentAgentModelLabel(agent: Agent): string {
     return selected;
   }
 
-  const cached = modelOptionsCacheByAgent[agent.id];
+  const cached = state.modelOptionsCacheByAgent[agent.id];
   if (cached && cached.length > 0) {
     return `${resolveModelDisplayName(cached[0])}（默认）`;
   }
@@ -2736,7 +2713,7 @@ function syncAgentModelFromAboutContent(agentId: string, content: string) {
     return;
   }
 
-  const agent = agents.find((item) => item.id === agentId);
+  const agent = state.agents.find((item) => item.id === agentId);
   if (!agent || agent.selectedModel === detectedModel) {
     return;
   }
@@ -2744,7 +2721,7 @@ function syncAgentModelFromAboutContent(agentId: string, content: string) {
   agent.selectedModel = detectedModel;
   void saveAgents();
   renderAgentList();
-  if (currentAgentId === agentId) {
+  if (state.currentAgentId === agentId) {
     updateCurrentAgentModelUI();
   }
 }
@@ -2755,10 +2732,10 @@ async function switchAgentModel(agent: Agent, modelName: string): Promise<string
     return '模型名称不能为空';
   }
 
-  modelSwitchingAgentId = agent.id;
+  state.modelSwitchingAgentId = agent.id;
   agent.status = 'connecting';
   renderAgentList();
-  if (currentAgentId === agent.id) {
+  if (state.currentAgentId === agent.id) {
     updateAgentStatusUI(agent.status);
   }
   refreshComposerState();
@@ -2775,7 +2752,7 @@ async function switchAgentModel(agent: Agent, modelName: string): Promise<string
     agent.selectedModel = targetModel;
     await saveAgents();
     renderAgentList();
-    if (currentAgentId === agent.id) {
+    if (state.currentAgentId === agent.id) {
       updateAgentStatusUI(agent.status);
     }
     refreshComposerState();
@@ -2785,14 +2762,14 @@ async function switchAgentModel(agent: Agent, modelName: string): Promise<string
     agent.status = 'error';
     await saveAgents();
     renderAgentList();
-    if (currentAgentId === agent.id) {
+    if (state.currentAgentId === agent.id) {
       updateAgentStatusUI(agent.status);
     }
     refreshComposerState();
     return String(error);
   } finally {
-    modelSwitchingAgentId = null;
-    if (currentAgentId === agent.id) {
+    state.modelSwitchingAgentId = null;
+    if (state.currentAgentId === agent.id) {
       updateCurrentAgentModelUI();
     }
   }
@@ -2808,7 +2785,7 @@ async function handleLocalModelCommand(
     return false;
   }
 
-  const agent = agents.find((item) => item.id === agentId);
+  const agent = state.agents.find((item) => item.id === agentId);
   if (!agent) {
     showError('当前 Agent 不存在');
     return true;
@@ -2826,7 +2803,7 @@ async function handleLocalModelCommand(
 
   const modelOptions =
     command.kind === 'current'
-      ? modelOptionsCacheByAgent[agent.id] || []
+      ? state.modelOptionsCacheByAgent[agent.id] || []
       : await loadAgentModelOptions(agent, false);
 
   if (command.kind === 'help') {
@@ -2909,9 +2886,9 @@ async function handleLocalModelCommand(
 
 async function sendMessage() {
   const content = messageInputEl.value.trim();
-  const requestAgentId = currentAgentId;
-  const requestSessionId = currentSessionId;
-  if (!content || !requestAgentId || !requestSessionId || inflightSessionByAgent[requestAgentId]) {
+  const requestAgentId = state.currentAgentId;
+  const requestSessionId = state.currentSessionId;
+  if (!content || !requestAgentId || !requestSessionId || state.inflightSessionByAgent[requestAgentId]) {
     return;
   }
 
@@ -2936,7 +2913,7 @@ async function sendMessage() {
     content: '📤 正在发送消息...',
     timestamp: new Date(),
   };
-  messages.push(sendingMessage);
+  state.messages.push(sendingMessage);
   renderMessages();
   scrollToBottom();
 
@@ -2946,11 +2923,11 @@ async function sendMessage() {
     content,
     timestamp: new Date(),
   };
-  messages.push(userMessage);
+  state.messages.push(userMessage);
   touchCurrentSession();
   renderMessages();
   scrollToBottom();
-  inflightSessionByAgent[requestAgentId] = requestSessionId;
+  state.inflightSessionByAgent[requestAgentId] = requestSessionId;
   refreshComposerState();
 
   try {
@@ -2961,15 +2938,15 @@ async function sendMessage() {
     }
     await tauriSendMessage(requestAgentId, content, targetSession?.acpSessionId || null);
 
-    messages = messages.filter((m) => m.id !== sendingMessage.id);
+    state.messages = state.messages.filter((m) => m.id !== sendingMessage.id);
     renderMessages();
 
-    if (inflightSessionByAgent[requestAgentId] !== requestSessionId) {
+    if (state.inflightSessionByAgent[requestAgentId] !== requestSessionId) {
       return;
     }
 
-    messageTimeout = window.setTimeout(() => {
-      if (inflightSessionByAgent[requestAgentId] !== requestSessionId) {
+    state.messageTimeout = window.setTimeout(() => {
+      if (state.inflightSessionByAgent[requestAgentId] !== requestSessionId) {
         return;
       }
       const timeoutMessage: Message = {
@@ -2979,40 +2956,40 @@ async function sendMessage() {
           '⏱️ 响应超时（60秒）。可能原因：\n1. iFlow 正在处理复杂任务\n2. 连接已断开\n3. iFlow 服务异常\n\n你可以：\n- 等待更长时间\n- 检查 iFlow 状态\n- 重新连接 Agent',
         timestamp: new Date(),
       };
-      messages.push(timeoutMessage);
+      state.messages.push(timeoutMessage);
       renderMessages();
 
-      delete inflightSessionByAgent[requestAgentId];
+      delete state.inflightSessionByAgent[requestAgentId];
       refreshComposerState();
       showError('响应超时，请检查连接状态');
     }, MESSAGE_TIMEOUT_MS);
   } catch (error) {
-    messages = messages.filter((m) => m.id !== sendingMessage.id);
+    state.messages = state.messages.filter((m) => m.id !== sendingMessage.id);
     renderMessages();
 
-    if (inflightSessionByAgent[requestAgentId] !== requestSessionId) {
+    if (state.inflightSessionByAgent[requestAgentId] !== requestSessionId) {
       return;
     }
 
     showError(`发送失败: ${String(error)}`);
-    delete inflightSessionByAgent[requestAgentId];
+    delete state.inflightSessionByAgent[requestAgentId];
     refreshComposerState();
   }
 }
 
 async function stopCurrentMessage() {
-  const requestAgentId = currentAgentId;
-  if (!requestAgentId || !inflightSessionByAgent[requestAgentId]) {
+  const requestAgentId = state.currentAgentId;
+  if (!requestAgentId || !state.inflightSessionByAgent[requestAgentId]) {
     return;
   }
 
-  if (messageTimeout) {
-    clearTimeout(messageTimeout);
-    messageTimeout = null;
+  if (state.messageTimeout) {
+    clearTimeout(state.messageTimeout);
+    state.messageTimeout = null;
   }
 
-  delete inflightSessionByAgent[requestAgentId];
-  messages = messages.filter((m) => !m.id.includes('-sending') && !m.id.includes('-processing'));
+  delete state.inflightSessionByAgent[requestAgentId];
+  state.messages = state.messages.filter((m) => !m.id.includes('-sending') && !m.id.includes('-processing'));
   renderMessages();
   refreshComposerState();
 
@@ -3057,8 +3034,8 @@ function showToolCalls(toolCalls: ToolCall[]) {
 function renderMessages() {
   persistCurrentSessionMessages();
   let latestInteractiveMessageIndex = -1;
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    if (messages[i].role === 'assistant' || messages[i].role === 'user') {
+  for (let i = state.messages.length - 1; i >= 0; i -= 1) {
+    if (state.messages[i].role === 'assistant' || state.messages[i].role === 'user') {
       latestInteractiveMessageIndex = i;
       break;
     }
@@ -3068,9 +3045,9 @@ function renderMessages() {
     ? `<div class="thinking-indicator" aria-live="polite" aria-label="iFlow 正在思考">🤔</div>`
     : '';
 
-  if (messages.length === 0) {
-    const title = currentSessionId ? '当前会话暂无消息' : '👋 欢迎使用 flow hub';
-    const hint = currentSessionId
+  if (state.messages.length === 0) {
+    const title = state.currentSessionId ? '当前会话暂无消息' : '👋 欢迎使用 flow hub';
+    const hint = state.currentSessionId
       ? '开始输入消息，内容将保存在当前会话中。'
       : '从左侧选择一个 Agent 开始对话，或添加新的 Agent。';
     chatMessagesEl.innerHTML = `
@@ -3084,7 +3061,7 @@ function renderMessages() {
   }
 
   chatMessagesEl.innerHTML =
-    messages
+    state.messages
       .map((msg, index) => {
       if (msg.role === 'thought') {
         return `
@@ -3108,8 +3085,8 @@ function renderMessages() {
       if (isLatestInteractive && msg.role === 'assistant') {
         let retryTargetMessageId = '';
         for (let i = index - 1; i >= 0; i -= 1) {
-          if (messages[i].role === 'user') {
-            retryTargetMessageId = messages[i].id;
+          if (state.messages[i].role === 'user') {
+            retryTargetMessageId = state.messages[i].id;
             break;
           }
         }
@@ -3178,21 +3155,21 @@ function renderMessages() {
 
 // 开始新会话
 function startNewSession() {
-  if (!currentAgentId) {
+  if (!state.currentAgentId) {
     return;
   }
 
-  const index = (sessionsByAgent[currentAgentId]?.length || 0) + 1;
-  const session = createSession(currentAgentId, `会话 ${index}`);
+  const index = (state.sessionsByAgent[state.currentAgentId]?.length || 0) + 1;
+  const session = createSession(state.currentAgentId, `会话 ${index}`);
 
-  if (!sessionsByAgent[currentAgentId]) {
-    sessionsByAgent[currentAgentId] = [];
+  if (!state.sessionsByAgent[state.currentAgentId]) {
+    state.sessionsByAgent[state.currentAgentId] = [];
   }
-  sessionsByAgent[currentAgentId].push(session);
-  messagesBySession[session.id] = [];
+  state.sessionsByAgent[state.currentAgentId].push(session);
+  state.messagesBySession[session.id] = [];
 
-  currentSessionId = session.id;
-  messages = [];
+  state.currentSessionId = session.id;
+  state.messages = [];
 
   void saveSessions();
   void saveSessionMessages();
@@ -3203,12 +3180,12 @@ function startNewSession() {
 
 // 清空当前会话
 function clearChat() {
-  if (!currentSessionId) {
+  if (!state.currentSessionId) {
     return;
   }
 
-  messages = [];
-  messagesBySession[currentSessionId] = [];
+  state.messages = [];
+  state.messagesBySession[state.currentSessionId] = [];
   touchCurrentSession();
   renderMessages();
   renderSessionList();
@@ -3216,20 +3193,20 @@ function clearChat() {
 }
 
 function selectSession(sessionId: string) {
-  if (!currentAgentId) {
+  if (!state.currentAgentId) {
     return;
   }
 
-  const session = (sessionsByAgent[currentAgentId] || []).find((item) => item.id === sessionId);
+  const session = (state.sessionsByAgent[state.currentAgentId] || []).find((item) => item.id === sessionId);
   if (!session) {
     return;
   }
 
-  currentSessionId = sessionId;
+  state.currentSessionId = sessionId;
   const cachedMessages = getMessagesForSession(sessionId);
-  messages = cachedMessages;
+  state.messages = cachedMessages;
   if (session.source === 'iflow-log' && cachedMessages.length === 0) {
-    messages = [
+    state.messages = [
       {
         id: `msg-${Date.now()}-history-loading`,
         role: 'system',
@@ -3264,33 +3241,33 @@ function createSession(agentId: string, title = '新会话'): Session {
 }
 
 function ensureAgentHasSessions(agentId: string) {
-  if (!sessionsByAgent[agentId]) {
-    sessionsByAgent[agentId] = [];
+  if (!state.sessionsByAgent[agentId]) {
+    state.sessionsByAgent[agentId] = [];
   }
-  if (sessionsByAgent[agentId].length > 0) {
+  if (state.sessionsByAgent[agentId].length > 0) {
     return;
   }
 
   const session = createSession(agentId, '默认会话');
-  sessionsByAgent[agentId] = [session];
-  messagesBySession[session.id] = [];
+  state.sessionsByAgent[agentId] = [session];
+  state.messagesBySession[session.id] = [];
 }
 
 function getSessionsForAgent(agentId: string): Session[] {
-  return [...(sessionsByAgent[agentId] || [])].sort(
+  return [...(state.sessionsByAgent[agentId] || [])].sort(
     (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime()
   );
 }
 
 function getMessagesForSession(sessionId: string): Message[] {
-  return (messagesBySession[sessionId] || []).map((msg) => ({
+  return (state.messagesBySession[sessionId] || []).map((msg) => ({
     ...msg,
     timestamp: new Date(msg.timestamp),
   }));
 }
 
 function findSessionById(sessionId: string): Session | null {
-  for (const sessionList of Object.values(sessionsByAgent)) {
+  for (const sessionList of Object.values(state.sessionsByAgent)) {
     const matched = sessionList.find((item) => item.id === sessionId);
     if (matched) {
       return matched;
@@ -3300,10 +3277,10 @@ function findSessionById(sessionId: string): Session | null {
 }
 
 function touchCurrentSession() {
-  if (!currentAgentId || !currentSessionId) {
+  if (!state.currentAgentId || !state.currentSessionId) {
     return;
   }
-  const session = (sessionsByAgent[currentAgentId] || []).find((item) => item.id === currentSessionId);
+  const session = (state.sessionsByAgent[state.currentAgentId] || []).find((item) => item.id === state.currentSessionId);
   if (!session) {
     return;
   }
@@ -3314,7 +3291,7 @@ function touchCurrentSession() {
 }
 
 function touchSessionById(sessionId: string, sessionMessages?: Message[]) {
-  for (const sessionList of Object.values(sessionsByAgent)) {
+  for (const sessionList of Object.values(state.sessionsByAgent)) {
     const session = sessionList.find((item) => item.id === sessionId);
     if (!session) {
       continue;
@@ -3586,14 +3563,14 @@ function toStoredMessage(message: Message): StoredMessage {
 }
 
 function persistCurrentSessionMessages() {
-  if (!currentSessionId) {
+  if (!state.currentSessionId) {
     return;
   }
-  const session = findSessionById(currentSessionId);
+  const session = findSessionById(state.currentSessionId);
   if (session?.source === 'iflow-log') {
     return;
   }
-  messagesBySession[currentSessionId] = messages.map((msg) => ({
+  state.messagesBySession[state.currentSessionId] = state.messages.map((msg) => ({
     ...msg,
     timestamp: new Date(msg.timestamp),
   }));
@@ -3602,7 +3579,7 @@ function persistCurrentSessionMessages() {
 
 function buildStoredSessionMap(): StoredSessionMap {
   const payload: StoredSessionMap = {};
-  for (const [agentId, sessionList] of Object.entries(sessionsByAgent)) {
+  for (const [agentId, sessionList] of Object.entries(state.sessionsByAgent)) {
     payload[agentId] = sessionList.map(toStoredSession);
   }
   return payload;
@@ -3610,7 +3587,7 @@ function buildStoredSessionMap(): StoredSessionMap {
 
 function buildStoredMessageMap(): StoredMessageMap {
   const payload: StoredMessageMap = {};
-  for (const [sessionId, sessionMessages] of Object.entries(messagesBySession)) {
+  for (const [sessionId, sessionMessages] of Object.entries(state.messagesBySession)) {
     const session = findSessionById(sessionId);
     if (session?.source === 'iflow-log') {
       continue;
@@ -3727,14 +3704,14 @@ function isStorageSnapshotEmpty(snapshot: StorageSnapshot): boolean {
 async function loadSessionStore() {
   const backendSnapshot = await loadStorageSnapshot();
   if (backendSnapshot) {
-    sessionsByAgent = normalizeStoredSessions(backendSnapshot.sessionsByAgent);
-    messagesBySession = normalizeStoredMessages(backendSnapshot.messagesBySession);
+    state.sessionsByAgent = normalizeStoredSessions(backendSnapshot.sessionsByAgent);
+    state.messagesBySession = normalizeStoredMessages(backendSnapshot.messagesBySession);
 
     if (isStorageSnapshotEmpty(backendSnapshot)) {
       const localSnapshot = readStorageSnapshotFromLocalStorage();
       if (localSnapshot) {
-        sessionsByAgent = normalizeStoredSessions(localSnapshot.sessionsByAgent);
-        messagesBySession = normalizeStoredMessages(localSnapshot.messagesBySession);
+        state.sessionsByAgent = normalizeStoredSessions(localSnapshot.sessionsByAgent);
+        state.messagesBySession = normalizeStoredMessages(localSnapshot.messagesBySession);
         await persistStorageSnapshot(localSnapshot);
       }
     }
@@ -3743,13 +3720,13 @@ async function loadSessionStore() {
 
   const localSnapshot = readStorageSnapshotFromLocalStorage();
   if (!localSnapshot) {
-    sessionsByAgent = {};
-    messagesBySession = {};
+    state.sessionsByAgent = {};
+    state.messagesBySession = {};
     return;
   }
 
-  sessionsByAgent = normalizeStoredSessions(localSnapshot.sessionsByAgent);
-  messagesBySession = normalizeStoredMessages(localSnapshot.messagesBySession);
+  state.sessionsByAgent = normalizeStoredSessions(localSnapshot.sessionsByAgent);
+  state.messagesBySession = normalizeStoredMessages(localSnapshot.messagesBySession);
 }
 
 async function saveSessions() {
@@ -3772,14 +3749,14 @@ async function migrateLegacyHistoryIfNeeded() {
       if (!Array.isArray(storedMessages)) {
         continue;
       }
-      if (!sessionsByAgent[agentId] || sessionsByAgent[agentId].length === 0) {
+      if (!state.sessionsByAgent[agentId] || state.sessionsByAgent[agentId].length === 0) {
         const migratedSession = createSession(agentId, '历史会话');
-        sessionsByAgent[agentId] = [migratedSession];
+        state.sessionsByAgent[agentId] = [migratedSession];
       }
 
-      const targetSession = sessionsByAgent[agentId][0];
+      const targetSession = state.sessionsByAgent[agentId][0];
       const normalizedMessages = storedMessages.map(parseStoredMessage);
-      messagesBySession[targetSession.id] = normalizedMessages;
+      state.messagesBySession[targetSession.id] = normalizedMessages;
 
       if (normalizedMessages.length > 0) {
         const lastTimestamp = normalizedMessages[normalizedMessages.length - 1].timestamp;
@@ -3796,30 +3773,30 @@ async function migrateLegacyHistoryIfNeeded() {
 }
 
 function pruneSessionDataByAgents() {
-  const liveAgentIds = new Set(agents.map((agent) => agent.id));
+  const liveAgentIds = new Set(state.agents.map((agent) => agent.id));
 
   const prunedSessions: Record<string, Session[]> = {};
-  for (const [agentId, sessionList] of Object.entries(sessionsByAgent)) {
+  for (const [agentId, sessionList] of Object.entries(state.sessionsByAgent)) {
     if (!liveAgentIds.has(agentId)) {
       continue;
     }
     prunedSessions[agentId] = sessionList;
   }
-  sessionsByAgent = prunedSessions;
+  state.sessionsByAgent = prunedSessions;
 
   const liveSessionIds = new Set(
-    Object.values(sessionsByAgent)
+    Object.values(state.sessionsByAgent)
       .flat()
       .map((session) => session.id)
   );
 
   const prunedMessages: Record<string, Message[]> = {};
-  for (const [sessionId, sessionMessages] of Object.entries(messagesBySession)) {
+  for (const [sessionId, sessionMessages] of Object.entries(state.messagesBySession)) {
     if (liveSessionIds.has(sessionId)) {
       prunedMessages[sessionId] = sessionMessages;
     }
   }
-  messagesBySession = prunedMessages;
+  state.messagesBySession = prunedMessages;
 }
 
 // 加载 Agent 列表
@@ -3836,8 +3813,8 @@ async function loadAgents() {
       return;
     }
 
-    agents = JSON.parse(saved) as Agent[];
-    agents = agents.map((agent) => ({
+    state.agents = JSON.parse(saved) as Agent[];
+    state.agents = state.agents.map((agent) => ({
       ...agent,
       iflowPath: agent.iflowPath || 'iflow',
       status: 'disconnected' as const,
@@ -3860,7 +3837,7 @@ async function loadAgents() {
 // 保存 Agent 列表
 async function saveAgents() {
   try {
-    localStorage.setItem(AGENTS_STORAGE_KEY, JSON.stringify(agents));
+    localStorage.setItem(AGENTS_STORAGE_KEY, JSON.stringify(state.agents));
   } catch (e) {
     console.error('Failed to save agents:', e);
   }
