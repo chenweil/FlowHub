@@ -135,7 +135,8 @@ export async function clearCurrentAgentSessions() {
   state.messages = [];
   delete state.inflightSessionByAgent[state.currentAgentId];
 
-  const { clearArtifactPreviewCacheForAgent, closeArtifactPreviewModal, renderMessages, refreshComposerState } = await import('../app');
+  const { clearArtifactPreviewCacheForAgent, closeArtifactPreviewModal, renderMessages } = await import('../ui');
+  const { refreshComposerState } = await import('../app');
   clearArtifactPreviewCacheForAgent(state.currentAgentId);
   closeArtifactPreviewModal();
 
@@ -186,7 +187,8 @@ export function renderSessionList() {
 }
 
 export async function deleteSession(sessionId: string) {
-  const { renderMessages, refreshComposerState } = await import('../app');
+  const { renderMessages } = await import('../ui');
+  const { refreshComposerState } = await import('../app');
   if (!state.currentAgentId) {
     return;
   }
@@ -262,7 +264,7 @@ export function commitSessionMessages(sessionId: string, sessionMessages: Messag
 
   if (sessionId === state.currentSessionId) {
     state.messages = sessionMessages;
-    void import('../app').then(({ renderMessages, scrollToBottom }) => {
+    void import('../ui').then(({ renderMessages, scrollToBottom }) => {
       renderMessages();
       scrollToBottom();
     });
@@ -293,11 +295,10 @@ export function startNewSession() {
   void saveSessions();
   void saveSessionMessages();
   renderSessionList();
-  void import('../app').then(({ renderMessages, refreshComposerState }) => {
+  void Promise.all([import('../ui'), import('../app')]).then(([{ renderMessages }, { refreshComposerState }]) => {
     renderMessages();
     refreshComposerState();
-  });
-}
+  });}
 
 // 清空当前会话
 export function clearChat() {
@@ -308,7 +309,7 @@ export function clearChat() {
   state.messages = [];
   state.messagesBySession[state.currentSessionId] = [];
   touchCurrentSession();
-  void import('../app').then(({ renderMessages, refreshComposerState }) => {
+  void Promise.all([import('../ui'), import('../app')]).then(([{ renderMessages }, { refreshComposerState }]) => {
     renderMessages();
     renderSessionList();
     refreshComposerState();
@@ -340,7 +341,7 @@ export function selectSession(sessionId: string) {
     void loadIflowHistoryMessagesForSession(session);
   }
   renderSessionList();
-  void import('../app').then(({ renderMessages, scrollToBottom, refreshComposerState }) => {
+  void Promise.all([import('../ui'), import('../app')]).then(([{ renderMessages, scrollToBottom }, { refreshComposerState }]) => {
     renderMessages();
     scrollToBottom();
     refreshComposerState();
@@ -809,7 +810,8 @@ export async function syncIflowHistorySessions(agent: Agent): Promise<void> {
           selectSession(fallbackSession.id);
         } else {
           renderSessionList();
-          const { renderMessages, refreshComposerState } = await import('../app');
+          const { renderMessages } = await import('../ui');
+          const { refreshComposerState } = await import('../app');
           renderMessages();
           refreshComposerState();
         }
@@ -849,7 +851,8 @@ export async function loadIflowHistoryMessagesForSession(session: Session): Prom
           timestamp: new Date(),
         },
       ];
-      const { renderMessages, refreshComposerState } = await import('../app');
+      const { renderMessages } = await import('../ui');
+      const { refreshComposerState } = await import('../app');
       renderMessages();
       refreshComposerState();
     }
@@ -874,7 +877,8 @@ export async function loadIflowHistoryMessagesForSession(session: Session): Prom
       ).length;
     }
 
-    const { renderMessages, scrollToBottom, refreshComposerState } = await import('../app');
+    const { renderMessages, scrollToBottom } = await import('../ui');
+    const { refreshComposerState } = await import('../app');
     if (state.currentSessionId === session.id) {
       state.messages = normalized;
       renderMessages();
@@ -906,7 +910,8 @@ export async function loadIflowHistoryMessagesForSession(session: Session): Prom
         await saveSessionMessages();
       }
 
-      const { renderMessages, refreshComposerState } = await import('../app');
+      const { renderMessages } = await import('../ui');
+      const { refreshComposerState } = await import('../app');
       if (state.currentAgentId === session.agentId) {
         const scoped = getSessionsForAgent(session.agentId);
         const currentStillExists =
@@ -932,7 +937,8 @@ export async function loadIflowHistoryMessagesForSession(session: Session): Prom
     }
 
     if (state.currentSessionId === session.id) {
-      const { renderMessages, refreshComposerState } = await import('../app');
+      const { renderMessages } = await import('../ui');
+      const { refreshComposerState } = await import('../app');
       state.messages = [
         {
           id: `msg-${Date.now()}-history-load-failed`,

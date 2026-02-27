@@ -5,11 +5,11 @@ import {
   syncAppVersion,
   setupEventListeners,
   setupTauriEventListeners,
-  warmUpArtifactPreviewFrame,
   setSendButtonMode,
   refreshComposerState,
 } from './features/app';
 import { loadAgents, updateCurrentAgentModelUI } from './features/agents';
+import { warmUpArtifactPreviewFrame } from './features/ui';
 
 async function init() {
   console.log('Initializing app...');

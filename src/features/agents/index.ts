@@ -233,7 +233,7 @@ export function mergeToolCalls(agentId: string, incoming: ToolCall[]) {
 
   state.toolCallsByAgent[agentId] = merged;
   if (agentId === state.currentAgentId) {
-    void import('../app').then(({ showToolCalls }) => {
+    void import('../ui').then(({ showToolCalls }) => {
       showToolCalls(merged);
     });
   }
@@ -447,7 +447,7 @@ export async function addAgent(name: string, iflowPath: string, workspacePath: s
 export function selectAgent(agentId: string) {
   closeCurrentAgentModelMenu();
   if (state.currentAgentId && state.currentAgentId !== agentId) {
-    void import('../app').then(({ closeArtifactPreviewModal }) => {
+    void import('../ui').then(({ closeArtifactPreviewModal }) => {
       closeArtifactPreviewModal();
     });
   }
@@ -472,7 +472,7 @@ export function selectAgent(agentId: string) {
   } else {
     state.currentSessionId = null;
     state.messages = [];
-    void import('../app').then(({ renderMessages }) => {
+    void import('../ui').then(({ renderMessages }) => {
       renderMessages();
     });
     renderSessionList();
@@ -483,7 +483,7 @@ export function selectAgent(agentId: string) {
   updateConnectionStatus(isConnected);
   const existingToolCalls = state.toolCallsByAgent[agentId] || [];
   if (existingToolCalls.length > 0) {
-    void import('../app').then(({ showToolCalls }) => {
+    void import('../ui').then(({ showToolCalls }) => {
       showToolCalls(existingToolCalls);
     });
   } else {
@@ -525,7 +525,8 @@ export async function deleteAgent(agentId: string) {
   delete state.toolCallsByAgent[agentId];
   delete state.modelOptionsCacheByAgent[agentId];
 
-  const { clearArtifactPreviewCacheForAgent, closeArtifactPreviewModal, renderMessages, refreshComposerState } = await import('../app');
+  const { clearArtifactPreviewCacheForAgent, closeArtifactPreviewModal, renderMessages } = await import('../ui');
+  const { refreshComposerState } = await import('../app');
   clearArtifactPreviewCacheForAgent(agentId);
 
   const removedSessions = state.sessionsByAgent[agentId] || [];
