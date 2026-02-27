@@ -36,7 +36,7 @@
 }
 
 @media (prefers-color-scheme: light) {
-  :root {
+  :root:not(.theme-dark) {
     --bg-primary: #ffffff;
     --bg-secondary: #f6f8fa;
     --bg-tertiary: #eaeef2;
@@ -57,16 +57,45 @@
     --error-color: #cf222e;
   }
 
-  /* 下拉菜单阴影：深色硬编码需要覆盖 */
-  .model-selector-menu,
-  .slash-command-menu {
+  :root:not(.theme-dark) .model-selector-menu,
+  :root:not(.theme-dark) .slash-command-menu {
     box-shadow: 0 8px 24px rgba(31, 35, 40, 0.12);
   }
 
-  /* 表格背景：深色 rgba 在浅色模式下显异常 */
-  .markdown-content .md-table {
+  :root:not(.theme-dark) .markdown-content .md-table {
     background: var(--bg-secondary);
   }
+}
+
+/* 强制亮色模式 */
+:root.theme-light {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f6f8fa;
+  --bg-tertiary: #eaeef2;
+  --bg-code: #f0f2f4;
+  --bg-busy: #eaeef2;
+  --border-color: #d0d7de;
+  --text-primary: #1f2328;
+  --text-secondary: #636c76;
+  --text-muted: #818b98;
+  --text-subtle: #6e7781;
+  --text-dim: #57606a;
+  --accent-color: #0969da;
+  --accent-hover: #0550ae;
+  --accent-secondary: #8250df;
+  --success-color: #1a7f37;
+  --success-text: #1a7f37;
+  --warning-color: #9a6700;
+  --error-color: #cf222e;
+}
+
+:root.theme-light .model-selector-menu,
+:root.theme-light .slash-command-menu {
+  box-shadow: 0 8px 24px rgba(31, 35, 40, 0.12);
+}
+
+:root.theme-light .markdown-content .md-table {
+  background: var(--bg-secondary);
 }
 
 body {
@@ -640,6 +669,12 @@ body {
 .btn-icon:hover {
   background: var(--bg-tertiary);
   color: var(--text-primary);
+}
+
+#theme-toggle-btn {
+  font-size: 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
 }
 
 .btn-send {

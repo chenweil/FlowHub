@@ -2,6 +2,13 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      (function () {
+        var t = localStorage.getItem('iflow-theme');
+        if (t === 'light') document.documentElement.classList.add('theme-light');
+        else if (t === 'dark') document.documentElement.classList.add('theme-dark');
+      })();
+    </script>
     <link rel="stylesheet" href="/src/styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>flow hub</title>
@@ -57,6 +64,7 @@
             </div>
           </div>
           <div class="toolbar-actions">
+            <button id="theme-toggle-btn" class="btn-icon" title="跟随系统">◑</button>
             <button id="new-session-btn" class="btn-secondary" disabled>新建会话</button>
             <button id="clear-chat-btn" class="btn-secondary" disabled>清空当前会话</button>
           </div>

@@ -43,6 +43,7 @@ const artifactPreviewModalEl = document.getElementById('artifact-preview-modal')
 const closeArtifactPreviewBtnEl = document.getElementById('close-artifact-preview') as HTMLButtonElement;
 const artifactPreviewPathEl = document.getElementById('artifact-preview-path') as HTMLDivElement;
 const artifactPreviewFrameEl = document.getElementById('artifact-preview-frame') as HTMLIFrameElement;
+const themeToggleBtnEl = document.getElementById('theme-toggle-btn') as HTMLButtonElement;
 const appVersionEl = document.getElementById('app-version') as HTMLDivElement;
 
 // 类型定义
@@ -247,8 +248,26 @@ function generateAcpSessionId(): string {
 }
 
 // 初始化
+// 主题管理
+type ThemeMode = 'system' | 'light' | 'dark';
+const THEME_STORAGE_KEY = 'iflow-theme';
+const THEME_CYCLE: Record<ThemeMode, ThemeMode> = { system: 'light', light: 'dark', dark: 'system' };
+const THEME_ICON: Record<ThemeMode, string> = { system: '◑', light: '☀', dark: '☾' };
+const THEME_TITLE: Record<ThemeMode, string> = { system: '跟随系统', light: '亮色模式', dark: '暗色模式' };
+
+let currentTheme: ThemeMode = (localStorage.getItem(THEME_STORAGE_KEY) as ThemeMode) || 'system';
+
+function applyTheme(mode: ThemeMode) {
+  const root = document.documentElement;
+  root.classList.remove('theme-light', 'theme-dark');
+  if (mode !== 'system') root.classList.add(`theme-${mode}`);
+  themeToggleBtnEl.textContent = THEME_ICON[mode];
+  themeToggleBtnEl.title = THEME_TITLE[mode];
+}
+
 async function init() {
   console.log('Initializing app...');
+  applyTheme(currentTheme);
   await syncAppVersion();
   await loadAgents();
   setupEventListeners();
@@ -901,6 +920,12 @@ function handleSlashMenuKeydown(event: KeyboardEvent): boolean {
 // 设置事件监听
 function setupEventListeners() {
   console.log('Setting up event listeners...');
+
+  themeToggleBtnEl.addEventListener('click', () => {
+    currentTheme = THEME_CYCLE[currentTheme];
+    applyTheme(currentTheme);
+    localStorage.setItem(THEME_STORAGE_KEY, currentTheme);
+  });
 
   addAgentBtnEl.addEventListener('click', () => {
     addAgentModalEl.classList.remove('hidden');
