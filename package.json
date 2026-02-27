@@ -1,6 +1,6 @@
 {
   "name": "iflow-workspace",
-  "version": "0.2.0",
+  "version": "0.2.2",
   "description": "Multi-Agent Desktop App for iFlow",
   "type": "module",
   "scripts": {
