@@ -3,6 +3,7 @@
 
 mod agents;
 mod commands;
+mod history;
 mod manager;
 mod models;
 mod router;
@@ -10,10 +11,13 @@ mod state;
 mod storage;
 
 use commands::{
-    clear_iflow_history_sessions, connect_iflow, delete_iflow_history_session, disconnect_agent,
-    list_available_models, list_iflow_history_sessions,
-    load_iflow_history_messages, read_html_artifact, resolve_html_artifact_path, send_message, stop_message,
+    connect_iflow, disconnect_agent,
+    list_available_models, read_html_artifact, resolve_html_artifact_path, send_message, stop_message,
     switch_agent_model,
+};
+use history::{
+    clear_iflow_history_sessions, delete_iflow_history_session, list_iflow_history_sessions,
+    load_iflow_history_messages,
 };
 use state::AppState;
 use storage::{load_storage_snapshot, save_storage_snapshot};
