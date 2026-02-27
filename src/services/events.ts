@@ -33,6 +33,7 @@ export interface AcpSessionPayload {
 
 export interface TaskFinishPayload {
   agentId?: string;
+  reason?: string;
 }
 
 export interface AgentErrorPayload {
