@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::models::ModelOption;
 
-pub(crate) fn resolve_iflow_executable_path(iflow_path: &str) -> Result<PathBuf, String> {
+fn resolve_iflow_executable_path(iflow_path: &str) -> Result<PathBuf, String> {
     let trimmed = iflow_path.trim();
     if trimmed.is_empty() {
         return Err("iflow path cannot be empty".to_string());
