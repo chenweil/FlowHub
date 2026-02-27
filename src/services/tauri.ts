@@ -9,7 +9,7 @@ import type {
 
 export { convertFileSrc, getVersion };
 
-interface ConnectIflowResult {
+export interface ConnectIflowResult {
   success: boolean;
   port: number;
   error?: string;
