@@ -20,6 +20,7 @@ import {
   saveSessions,
   saveSessionMessages,
 } from '../storage';
+import { showError } from '../agents';
 
 // ── Title generation constants ────────────────────────────────────────────────
 
@@ -104,7 +105,6 @@ export function onSessionListClick(event: MouseEvent) {
 }
 
 export async function clearCurrentAgentSessions() {
-  const { showError } = await import('../app');
   if (!state.currentAgentId) {
     showError('请先选择一个 Agent');
     return;
@@ -186,7 +186,7 @@ export function renderSessionList() {
 }
 
 export async function deleteSession(sessionId: string) {
-  const { showError, renderMessages, refreshComposerState } = await import('../app');
+  const { renderMessages, refreshComposerState } = await import('../app');
   if (!state.currentAgentId) {
     return;
   }
@@ -906,7 +906,7 @@ export async function loadIflowHistoryMessagesForSession(session: Session): Prom
         await saveSessionMessages();
       }
 
-      const { renderMessages, refreshComposerState, showError } = await import('../app');
+      const { renderMessages, refreshComposerState } = await import('../app');
       if (state.currentAgentId === session.agentId) {
         const scoped = getSessionsForAgent(session.agentId);
         const currentStillExists =
@@ -932,7 +932,7 @@ export async function loadIflowHistoryMessagesForSession(session: Session): Prom
     }
 
     if (state.currentSessionId === session.id) {
-      const { renderMessages, refreshComposerState, showError } = await import('../app');
+      const { renderMessages, refreshComposerState } = await import('../app');
       state.messages = [
         {
           id: `msg-${Date.now()}-history-load-failed`,
