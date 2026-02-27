@@ -125,13 +125,7 @@ const ARTIFACT_PREVIEW_READ_TIMEOUT_MS = 12000;
 const ARTIFACT_PREVIEW_CACHE_URL_PREFIX = 'url:';
 const ARTIFACT_PREVIEW_CACHE_HTML_PREFIX = 'html:';
 
-function generateAcpSessionId(): string {
-  const randomUuid =
-    typeof globalThis.crypto?.randomUUID === 'function'
-      ? globalThis.crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
-  return `session-${randomUuid}`;
-}
+import { generateAcpSessionId, shortAgentId, getWorkspaceName, streamTypeToRole, normalizeStoredRole, formatTime, formatSessionMeta } from './lib/utils';
 
 // 初始化
 // 主题管理
@@ -3561,33 +3555,6 @@ function normalizeTitleSource(content: string): string {
   return content.replace(/\s+/g, ' ').trim();
 }
 
-function shortAgentId(agentId: string): string {
-  return agentId.length > 8 ? agentId.slice(-8) : agentId;
-}
-
-function getWorkspaceName(workspacePath: string): string {
-  const normalized = workspacePath.replace(/\\/g, '/');
-  const parts = normalized.split('/').filter(Boolean);
-  return parts.length > 0 ? parts[parts.length - 1] : workspacePath;
-}
-
-function streamTypeToRole(messageType?: StreamMessageType): Message['role'] {
-  if (messageType === 'thought') {
-    return 'thought';
-  }
-  if (messageType === 'system' || messageType === 'plan') {
-    return 'system';
-  }
-  return 'assistant';
-}
-
-function normalizeStoredRole(role: string): Message['role'] {
-  if (role === 'user' || role === 'assistant' || role === 'system' || role === 'thought') {
-    return role;
-  }
-  return 'assistant';
-}
-
 function inferLegacyHistorySessionId(agentId: string, sessionId: string): string | null {
   const prefix = `iflowlog-${agentId}-`;
   if (!sessionId.startsWith(prefix)) {
@@ -4261,21 +4228,6 @@ function renderMarkdownContent(text: string): string {
     const tokenIndex = Number.parseInt(token, 10);
     return codeBlockTokens[tokenIndex] || '';
   });
-}
-
-function formatTime(date: Date): string {
-  return date.toLocaleTimeString('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-function formatSessionMeta(updatedAt: Date, messageCount: number): string {
-  const timeText = updatedAt.toLocaleTimeString('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-  return `${messageCount} 条消息 · ${timeText}`;
 }
 
 function showLoading(message: string) {
