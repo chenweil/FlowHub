@@ -23,7 +23,7 @@ export interface CommandRegistryPayload {
 export interface ModelRegistryPayload {
   agentId?: string;
   models?: unknown[];
-  currentModel?: unknown;
+  currentModel?: string;
 }
 
 export interface AcpSessionPayload {

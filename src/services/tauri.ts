@@ -4,6 +4,7 @@ import { getVersion } from '@tauri-apps/api/app';
 import type {
   IflowHistorySessionRecord,
   IflowHistoryMessageRecord,
+  ModelOption,
   StorageSnapshot,
 } from '../types';
 
@@ -61,8 +62,8 @@ export function deleteIflowHistorySession(
   return invoke<boolean>('delete_iflow_history_session', { workspacePath, sessionId });
 }
 
-export function listAvailableModels(iflowPath: string): Promise<unknown[]> {
-  return invoke<unknown[]>('list_available_models', { iflowPath });
+export function listAvailableModels(iflowPath: string): Promise<ModelOption[]> {
+  return invoke<ModelOption[]>('list_available_models', { iflowPath });
 }
 
 export function switchAgentModel(

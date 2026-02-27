@@ -26,6 +26,10 @@ import {
   loadStorageSnapshot as tauriLoadStorageSnapshot,
   saveStorageSnapshot as tauriSaveStorageSnapshot,
 } from './services/tauri';
+import { generateAcpSessionId, shortAgentId, getWorkspaceName, streamTypeToRole, normalizeStoredRole, formatTime, formatSessionMeta } from './lib/utils';
+import { escapeHtml } from './lib/html';
+import { formatMessageContent, normalizeTitleSource } from './lib/markdown';
+import type { Agent, Session, Message, ToolCall, RegistryCommand, RegistryMcpServer, ModelOption, AgentRegistry, SlashMenuItem, StoredSession, StoredMessage, StoredSessionMap, StoredMessageMap, LegacyMessageHistoryMap, StorageSnapshot, IflowHistoryMessageRecord, ComposerState, StreamMessageType, ThemeMode, ParsedModelSlashCommand } from './types';
 
 // DOM 元素
 const addAgentBtnEl = document.getElementById('add-agent-btn') as HTMLButtonElement;
@@ -69,9 +73,6 @@ const artifactPreviewPathEl = document.getElementById('artifact-preview-path') a
 const artifactPreviewFrameEl = document.getElementById('artifact-preview-frame') as HTMLIFrameElement;
 const themeToggleBtnEl = document.getElementById('theme-toggle-btn') as HTMLButtonElement;
 const appVersionEl = document.getElementById('app-version') as HTMLDivElement;
-
-// 类型定义
-import type { Agent, Session, Message, ToolCall, RegistryCommand, RegistryMcpServer, ModelOption, AgentRegistry, SlashMenuItem, StoredSession, StoredMessage, StoredSessionMap, StoredMessageMap, LegacyMessageHistoryMap, StorageSnapshot, IflowHistoryMessageRecord, ComposerState, StreamMessageType, ThemeMode, ParsedModelSlashCommand } from './types';
 
 // 状态
 let agents: Agent[] = [];
@@ -146,8 +147,6 @@ const ARTIFACT_PREVIEW_CACHE_LIMIT = 8;
 const ARTIFACT_PREVIEW_READ_TIMEOUT_MS = 12000;
 const ARTIFACT_PREVIEW_CACHE_URL_PREFIX = 'url:';
 const ARTIFACT_PREVIEW_CACHE_HTML_PREFIX = 'html:';
-
-import { generateAcpSessionId, shortAgentId, getWorkspaceName, streamTypeToRole, normalizeStoredRole, formatTime, formatSessionMeta } from './lib/utils';
 
 // 初始化
 // 主题管理
@@ -3866,11 +3865,6 @@ async function saveAgents() {
     console.error('Failed to save agents:', e);
   }
 }
-
-// 工具函数
-import { escapeHtml } from './lib/html';
-
-import { formatMessageContent, normalizeTitleSource } from './lib/markdown';
 
 function showLoading(message: string) {
   console.log('Loading:', message);
