@@ -3839,6 +3839,3 @@ export function showError(message: string) {
   console.error('Error:', message);
   alert(message);
 }
-
-// 启动应用
-console.log('Starting app...');
