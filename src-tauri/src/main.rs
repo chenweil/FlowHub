@@ -6,6 +6,7 @@ mod artifact;
 mod commands;
 mod history;
 mod manager;
+mod model_resolver;
 mod models;
 mod router;
 mod state;
@@ -13,9 +14,9 @@ mod storage;
 
 use artifact::{read_html_artifact, resolve_html_artifact_path};
 use commands::{
-    connect_iflow, disconnect_agent, list_available_models, send_message, stop_message,
-    switch_agent_model,
+    connect_iflow, disconnect_agent, send_message, stop_message, switch_agent_model,
 };
+use model_resolver::list_available_models;
 use history::{
     clear_iflow_history_sessions, delete_iflow_history_session, list_iflow_history_sessions,
     load_iflow_history_messages,
