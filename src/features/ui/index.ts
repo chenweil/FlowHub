@@ -19,7 +19,7 @@ import {
 } from '../../dom';
 import { persistCurrentSessionMessages } from '../storage';
 import { showError, isCurrentAgentBusy } from '../agents';
-import { canUseConversationQuickAction } from '../app';
+import { canUseConversationQuickAction } from '../../store';
 
 // ── Artifact preview constants ────────────────────────────────────────────────
 

@@ -38,3 +38,11 @@ export const state = {
   // theme
   currentTheme: ((localStorage.getItem('iflow-theme') as ThemeMode) || 'system') as ThemeMode,
 };
+
+export function canUseConversationQuickAction(): boolean {
+  if (!state.currentAgentId || !state.currentSessionId) {
+    return false;
+  }
+  const agent = state.agents.find((item) => item.id === state.currentAgentId);
+  return Boolean(agent && agent.status === 'connected' && !state.inflightSessionByAgent[agent.id]);
+}

@@ -16,7 +16,7 @@ import {
 import { generateAcpSessionId, streamTypeToRole } from '../lib/utils';
 import { escapeHtml } from '../lib/html';
 import type { Message, SlashMenuItem, ComposerState, StreamMessageType, ThemeMode } from '../types';
-import { state } from '../store';
+import { state, canUseConversationQuickAction } from '../store';
 import {
   addAgentBtnEl,
   agentListEl,
@@ -611,7 +611,7 @@ export function setupEventListeners() {
 
     const name = nameInput.value.trim() || 'iFlow';
     const iflowPath = pathInput.value.trim() || 'iflow';
-    const workspacePath = workspaceInput.value.trim() || '/Users/chenweilong/playground';
+    const workspacePath = workspaceInput.value.trim();
 
     hideModal();
     await addAgent(name, iflowPath, workspacePath);
@@ -728,14 +728,6 @@ export function onDocumentClick(event: MouseEvent) {
     return;
   }
   closeCurrentAgentModelMenu();
-}
-
-export function canUseConversationQuickAction(): boolean {
-  if (!state.currentAgentId || !state.currentSessionId) {
-    return false;
-  }
-  const agent = state.agents.find((item) => item.id === state.currentAgentId);
-  return Boolean(agent && agent.status === 'connected' && !state.inflightSessionByAgent[agent.id]);
 }
 
 export async function sendPresetMessage(content: string, blockedHint: string) {
