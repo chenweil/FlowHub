@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agents;
+mod artifact;
 mod commands;
 mod history;
 mod manager;
@@ -10,9 +11,9 @@ mod router;
 mod state;
 mod storage;
 
+use artifact::{read_html_artifact, resolve_html_artifact_path};
 use commands::{
-    connect_iflow, disconnect_agent,
-    list_available_models, read_html_artifact, resolve_html_artifact_path, send_message, stop_message,
+    connect_iflow, disconnect_agent, list_available_models, send_message, stop_message,
     switch_agent_model,
 };
 use history::{
