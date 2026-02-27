@@ -1,7 +1,23 @@
 // iFlow Workspace - Main Entry
-import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { getVersion } from '@tauri-apps/api/app';
+import {
+  convertFileSrc,
+  getVersion,
+  readHtmlArtifact,
+  resolveHtmlArtifactPath,
+  clearIflowHistorySessions,
+  connectIflow,
+  listIflowHistorySessions,
+  loadIflowHistoryMessages,
+  disconnectAgent,
+  deleteIflowHistorySession,
+  listAvailableModels,
+  switchAgentModel as tauriSwitchAgentModel,
+  sendMessage as tauriSendMessage,
+  stopMessage,
+  loadStorageSnapshot as tauriLoadStorageSnapshot,
+  saveStorageSnapshot as tauriSaveStorageSnapshot,
+} from './services/tauri';
 
 // DOM 元素
 const addAgentBtnEl = document.getElementById('add-agent-btn') as HTMLButtonElement;
@@ -47,7 +63,7 @@ const themeToggleBtnEl = document.getElementById('theme-toggle-btn') as HTMLButt
 const appVersionEl = document.getElementById('app-version') as HTMLDivElement;
 
 // 类型定义
-import type { Agent, Session, Message, ToolCall, RegistryCommand, RegistryMcpServer, ModelOption, AgentRegistry, SlashMenuItem, StoredSession, StoredMessage, StoredSessionMap, StoredMessageMap, LegacyMessageHistoryMap, StorageSnapshot, IflowHistorySessionRecord, IflowHistoryMessageRecord, ComposerState, StreamMessageType, ThemeMode, ParsedModelSlashCommand } from './types';
+import type { Agent, Session, Message, ToolCall, RegistryCommand, RegistryMcpServer, ModelOption, AgentRegistry, SlashMenuItem, StoredSession, StoredMessage, StoredSessionMap, StoredMessageMap, LegacyMessageHistoryMap, StorageSnapshot, IflowHistoryMessageRecord, ComposerState, StreamMessageType, ThemeMode, ParsedModelSlashCommand } from './types';
 
 // 状态
 let agents: Agent[] = [];
@@ -1342,10 +1358,7 @@ async function openArtifactPreview(path: string) {
   let readError: unknown = null;
   try {
     const html = await Promise.race([
-      invoke<string>('read_html_artifact', {
-        agentId: agent.id,
-        filePath: normalizedPath,
-      }),
+      readHtmlArtifact(agent.id, normalizedPath),
       createArtifactPreviewTimeoutPromise(),
     ]);
 
@@ -1363,10 +1376,7 @@ async function openArtifactPreview(path: string) {
 
   try {
     const absolutePath = await Promise.race([
-      invoke<string>('resolve_html_artifact_path', {
-        agentId: agent.id,
-        filePath: normalizedPath,
-      }),
+      resolveHtmlArtifactPath(agent.id, normalizedPath),
       createArtifactPreviewTimeoutPromise(),
     ]);
 
@@ -1697,9 +1707,7 @@ async function clearCurrentAgentSessions() {
   }
 
   try {
-    await invoke<number>('clear_iflow_history_sessions', {
-      workspacePath: agent.workspacePath,
-    });
+    await clearIflowHistorySessions(agent.workspacePath);
   } catch (error) {
     console.error('Clear iFlow history sessions error:', error);
     showError(`清除磁盘历史记录失败: ${String(error)}`);
@@ -1738,16 +1746,7 @@ async function addAgent(name: string, iflowPath: string, workspacePath: string) 
     showLoading('正在连接 iFlow...');
 
     const agentId = `iflow-${Date.now()}`;
-    const result = await invoke<{
-      success: boolean;
-      port: number;
-      error?: string;
-    }>('connect_iflow', {
-      agentId,
-      iflowPath,
-      workspacePath,
-      model: null,
-    });
+    const result = await connectIflow(agentId, iflowPath, workspacePath, null);
 
     if (!result.success) {
       showError(result.error || '连接失败');
@@ -1884,9 +1883,7 @@ async function syncIflowHistorySessions(agent: Agent): Promise<void> {
   }
 
   try {
-    const histories = await invoke<IflowHistorySessionRecord[]>('list_iflow_history_sessions', {
-      workspacePath: agent.workspacePath,
-    });
+    const histories = await listIflowHistorySessions(agent.workspacePath);
     const historyList = Array.isArray(histories) ? histories : [];
 
     ensureAgentHasSessions(agent.id);
@@ -2069,10 +2066,7 @@ async function loadIflowHistoryMessagesForSession(session: Session): Promise<voi
   }
 
   try {
-    const rawMessages = await invoke<IflowHistoryMessageRecord[]>('load_iflow_history_messages', {
-      workspacePath: agent.workspacePath,
-      sessionId: effectiveSessionId,
-    });
+    const rawMessages = await loadIflowHistoryMessages(agent.workspacePath, effectiveSessionId);
 
     const normalized: Message[] = (Array.isArray(rawMessages) ? rawMessages : [])
       .flatMap((item) => expandIflowHistoryMessageRecord(item))
@@ -2215,7 +2209,7 @@ async function deleteAgent(agentId: string) {
   const agent = agents.find((a) => a.id === agentId);
   if (agent?.status === 'connected') {
     try {
-      await invoke('disconnect_agent', { agentId });
+      await disconnectAgent(agentId);
     } catch (e) {
       console.error('断开连接失败:', e);
     }
@@ -2395,10 +2389,7 @@ async function deleteSession(sessionId: string) {
 
   if (targetSession.acpSessionId) {
     try {
-      const deleted = await invoke<boolean>('delete_iflow_history_session', {
-        workspacePath: agent.workspacePath,
-        sessionId: targetSession.acpSessionId,
-      });
+      const deleted = await deleteIflowHistorySession(agent.workspacePath, targetSession.acpSessionId);
       if (targetSession.source === 'iflow-log' && !deleted) {
         showError('未找到对应历史会话文件，未执行删除');
         return;
@@ -2449,16 +2440,7 @@ async function reconnectAgent(agentId: string) {
   renderAgentList();
 
   try {
-    const result = await invoke<{
-      success: boolean;
-      port: number;
-      error?: string;
-    }>('connect_iflow', {
-      agentId: agent.id,
-      iflowPath: agent.iflowPath || 'iflow',
-      workspacePath: agent.workspacePath,
-      model: agent.selectedModel || null,
-    });
+    const result = await connectIflow(agent.id, agent.iflowPath || 'iflow', agent.workspacePath, agent.selectedModel || null);
 
     if (!result.success) {
       agent.status = 'error';
@@ -2600,9 +2582,7 @@ async function loadAgentModelOptions(agent: Agent, forceRefresh = false): Promis
   }
 
   try {
-    const raw = await invoke<unknown[]>('list_available_models', {
-      iflowPath: agent.iflowPath || 'iflow',
-    });
+    const raw = await listAvailableModels(agent.iflowPath || 'iflow');
     const normalized = Array.isArray(raw)
       ? raw.map((item) => normalizeModelOption(item)).filter((item): item is ModelOption => Boolean(item))
       : [];
@@ -2792,16 +2772,7 @@ async function switchAgentModel(agent: Agent, modelName: string): Promise<string
   refreshComposerState();
 
   try {
-    const result = await invoke<{
-      success: boolean;
-      port: number;
-      error?: string;
-    }>('switch_agent_model', {
-      agentId: agent.id,
-      iflowPath: agent.iflowPath || 'iflow',
-      workspacePath: agent.workspacePath,
-      model: targetModel,
-    });
+    const result = await tauriSwitchAgentModel(agent.id, agent.iflowPath || 'iflow', agent.workspacePath, targetModel);
 
     if (!result.success) {
       throw new Error(result.error || '模型切换失败');
@@ -2996,11 +2967,7 @@ async function sendMessage() {
       targetSession.acpSessionId = generateAcpSessionId();
       void saveSessions();
     }
-    await invoke('send_message', {
-      agentId: requestAgentId,
-      content,
-      sessionId: targetSession?.acpSessionId || null,
-    });
+    await tauriSendMessage(requestAgentId, content, targetSession?.acpSessionId || null);
 
     messages = messages.filter((m) => m.id !== sendingMessage.id);
     renderMessages();
@@ -3058,9 +3025,7 @@ async function stopCurrentMessage() {
   refreshComposerState();
 
   try {
-    await invoke('stop_message', {
-      agentId: requestAgentId,
-    });
+    await stopMessage(requestAgentId);
   } catch (error) {
     showError(`停止请求失败: ${String(error)}`);
   }
@@ -3720,7 +3685,7 @@ function clearLocalStorageSessionData() {
 
 async function loadStorageSnapshot(): Promise<StorageSnapshot | null> {
   try {
-    const snapshot = await invoke<StorageSnapshot>('load_storage_snapshot');
+    const snapshot = await tauriLoadStorageSnapshot();
     if (!snapshot) {
       return null;
     }
@@ -3736,7 +3701,7 @@ async function loadStorageSnapshot(): Promise<StorageSnapshot | null> {
 
 async function saveStorageSnapshot(snapshot: StorageSnapshot): Promise<boolean> {
   try {
-    await invoke('save_storage_snapshot', { snapshot });
+    await tauriSaveStorageSnapshot(snapshot);
     return true;
   } catch (e) {
     console.error('Failed to save session storage to backend:', e);
