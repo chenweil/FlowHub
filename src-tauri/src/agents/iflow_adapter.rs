@@ -8,6 +8,10 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 use crate::models::ListenerCommand;
 use crate::router::{emit_task_finish, handle_session_update};
+use super::session_params::{
+    build_initialize_params, build_session_new_params,
+    build_session_new_params_with_id, build_session_load_params, build_prompt_params,
+};
 
 // ACP 连接
 struct AcpConnection {
@@ -206,61 +210,6 @@ fn next_rpc_id(counter: &mut i64) -> i64 {
     let id = *counter;
     *counter += 1;
     id
-}
-
-fn build_initialize_params() -> Value {
-    json!({
-        "protocolVersion": 1,
-        "clientCapabilities": {
-            "fs": {
-                "readTextFile": true,
-                "writeTextFile": true,
-            }
-        },
-        "mcpServers": [],
-    })
-}
-
-fn build_session_new_params(workspace_path: &str) -> Value {
-    json!({
-        "cwd": workspace_path,
-        "mcpServers": [],
-        "settings": {
-            "permission_mode": "yolo",
-        }
-    })
-}
-
-fn build_session_new_params_with_id(workspace_path: &str, session_id: &str) -> Value {
-    json!({
-        "cwd": workspace_path,
-        "sessionId": session_id,
-        "mcpServers": [],
-        "settings": {
-            "permission_mode": "yolo",
-        }
-    })
-}
-
-fn build_session_load_params(workspace_path: &str, session_id: &str) -> Value {
-    json!({
-        "cwd": workspace_path,
-        "sessionId": session_id,
-        "mcpServers": [],
-        "settings": {
-            "permission_mode": "yolo",
-        }
-    })
-}
-
-fn build_prompt_params(session_id: &str, prompt: &str) -> Value {
-    json!({
-        "sessionId": session_id,
-        "prompt": [{
-            "type": "text",
-            "text": prompt,
-        }],
-    })
 }
 
 fn text_from_json_value(value: &Value) -> Option<String> {
