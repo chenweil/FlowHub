@@ -47,118 +47,7 @@ const themeToggleBtnEl = document.getElementById('theme-toggle-btn') as HTMLButt
 const appVersionEl = document.getElementById('app-version') as HTMLDivElement;
 
 // 类型定义
-interface Agent {
-  id: string;
-  name: string;
-  type: string;
-  status: 'connected' | 'disconnected' | 'connecting' | 'error';
-  workspacePath: string;
-  iflowPath?: string;
-  selectedModel?: string;
-  port?: number;
-}
-
-interface Session {
-  id: string;
-  agentId: string;
-  title: string;
-  createdAt: Date;
-  updatedAt: Date;
-  acpSessionId?: string;
-  source?: 'local' | 'iflow-log';
-  messageCountHint?: number;
-}
-
-interface Message {
-  id: string;
-  role: 'user' | 'assistant' | 'system' | 'thought';
-  content: string;
-  timestamp: Date;
-  agentId?: string;
-  toolCalls?: ToolCall[];
-}
-
-interface ToolCall {
-  id: string;
-  name: string;
-  status: 'pending' | 'running' | 'completed' | 'error';
-  arguments?: Record<string, unknown>;
-  output?: string;
-}
-
-interface RegistryCommand {
-  name: string;
-  description: string;
-  scope: string;
-}
-
-interface RegistryMcpServer {
-  name: string;
-  description: string;
-}
-
-interface ModelOption {
-  label: string;
-  value: string;
-}
-
-interface AgentRegistry {
-  commands: RegistryCommand[];
-  mcpServers: RegistryMcpServer[];
-}
-
-interface SlashMenuItem {
-  id: string;
-  label: string;
-  insertText: string;
-  description: string;
-  hint: string;
-  category: 'command' | 'mcp' | 'builtin';
-  searchable: string;
-}
-
-interface StoredSession {
-  id: string;
-  agentId: string;
-  title: string;
-  createdAt: string;
-  updatedAt: string;
-  acpSessionId?: string;
-  source?: 'local' | 'iflow-log';
-  messageCountHint?: number;
-}
-
-interface StoredMessage {
-  id: string;
-  role: 'user' | 'assistant' | 'system' | 'thought';
-  content: string;
-  timestamp: string;
-  agentId?: string;
-}
-
-type StoredSessionMap = Record<string, StoredSession[]>;
-type StoredMessageMap = Record<string, StoredMessage[]>;
-type LegacyMessageHistoryMap = Record<string, StoredMessage[]>;
-
-interface StorageSnapshot {
-  sessionsByAgent: StoredSessionMap;
-  messagesBySession: StoredMessageMap;
-}
-
-interface IflowHistorySessionRecord {
-  sessionId: string;
-  title: string;
-  createdAt: string;
-  updatedAt: string;
-  messageCount: number;
-}
-
-interface IflowHistoryMessageRecord {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  timestamp: string;
-}
+import type { Agent, Session, Message, ToolCall, RegistryCommand, RegistryMcpServer, ModelOption, AgentRegistry, SlashMenuItem, StoredSession, StoredMessage, StoredSessionMap, StoredMessageMap, LegacyMessageHistoryMap, StorageSnapshot, IflowHistorySessionRecord, IflowHistoryMessageRecord, ComposerState, StreamMessageType, ThemeMode, ParsedModelSlashCommand } from './types';
 
 // 状态
 let agents: Agent[] = [];
@@ -182,9 +71,6 @@ let artifactPreviewCacheByKey = new Map<string, string>();
 let artifactPreviewCacheOrder: string[] = [];
 let artifactPreviewLastKey: string | null = null;
 let renamingAgentId: string | null = null;
-
-type ComposerState = 'ready' | 'busy' | 'disabled';
-type StreamMessageType = 'content' | 'thought' | 'system' | 'plan';
 
 const AGENTS_STORAGE_KEY = 'iflow-agents';
 const SESSIONS_STORAGE_KEY = 'iflow-sessions';
@@ -249,7 +135,6 @@ function generateAcpSessionId(): string {
 
 // 初始化
 // 主题管理
-type ThemeMode = 'system' | 'light' | 'dark';
 const THEME_STORAGE_KEY = 'iflow-theme';
 const THEME_CYCLE: Record<ThemeMode, ThemeMode> = { system: 'light', light: 'dark', dark: 'system' };
 const THEME_ICON: Record<ThemeMode, string> = { system: '◑', light: '☀', dark: '☾' };
@@ -2010,19 +1895,20 @@ async function syncIflowHistorySessions(agent: Agent): Promise<void> {
     const histories = await invoke<IflowHistorySessionRecord[]>('list_iflow_history_sessions', {
       workspacePath: agent.workspacePath,
     });
-    if (!Array.isArray(histories) || histories.length === 0) {
-      return;
-    }
+    const historyList = Array.isArray(histories) ? histories : [];
 
     ensureAgentHasSessions(agent.id);
     const sessionList = sessionsByAgent[agent.id] || [];
     let changed = false;
+    let messagesChanged = false;
+    const liveHistorySessionIds = new Set<string>();
 
-    for (const history of histories) {
+    for (const history of historyList) {
       const acpSessionId = String(history.sessionId || '').trim();
       if (!acpSessionId) {
         continue;
       }
+      liveHistorySessionIds.add(acpSessionId);
 
       const expectedHistorySessionId = buildHistorySessionLocalId(agent.id, acpSessionId);
       const existing = sessionList.find(
@@ -2077,12 +1963,48 @@ async function syncIflowHistorySessions(agent: Agent): Promise<void> {
       changed = true;
     }
 
-    const dedupedSessions = dedupeSessionsByIdentity(sessionList);
-    if (dedupedSessions.length !== sessionList.length) {
-      sessionsByAgent[agent.id] = dedupedSessions;
+    const staleHistorySessions = sessionList.filter((item) => {
+      if (item.source !== 'iflow-log') {
+        return false;
+      }
+
+      const normalizedSessionId =
+        item.acpSessionId?.trim() || inferLegacyHistorySessionId(agent.id, item.id) || '';
+      if (!normalizedSessionId) {
+        return true;
+      }
+
+      return !liveHistorySessionIds.has(normalizedSessionId);
+    });
+    if (staleHistorySessions.length > 0) {
+      const staleSessionIds = new Set(staleHistorySessions.map((item) => item.id));
+      sessionsByAgent[agent.id] = sessionList.filter((item) => !staleSessionIds.has(item.id));
+      for (const staleSession of staleHistorySessions) {
+        delete messagesBySession[staleSession.id];
+      }
       changed = true;
+      messagesChanged = true;
     } else {
       sessionsByAgent[agent.id] = sessionList;
+    }
+
+    const normalizedSessionList = sessionsByAgent[agent.id] || [];
+    const dedupedSessions = dedupeSessionsByIdentity(normalizedSessionList);
+    if (dedupedSessions.length !== normalizedSessionList.length) {
+      sessionsByAgent[agent.id] = dedupedSessions;
+      changed = true;
+      const liveIds = new Set(dedupedSessions.map((item) => item.id));
+      for (const sessionId of Object.keys(messagesBySession)) {
+        if (!liveIds.has(sessionId) && sessionId.startsWith(`iflowlog-${agent.id}-`)) {
+          delete messagesBySession[sessionId];
+          messagesChanged = true;
+        }
+      }
+    }
+
+    if ((sessionsByAgent[agent.id] || []).length === 0) {
+      ensureAgentHasSessions(agent.id);
+      changed = true;
     }
 
     if (!changed) {
@@ -2090,8 +2012,29 @@ async function syncIflowHistorySessions(agent: Agent): Promise<void> {
     }
 
     await saveSessions();
+    if (messagesChanged) {
+      await saveSessionMessages();
+    }
+
     if (currentAgentId === agent.id) {
-      renderSessionList();
+      const activeSessions = getSessionsForAgent(agent.id);
+      const currentStillExists =
+        Boolean(currentSessionId) && activeSessions.some((item) => item.id === currentSessionId);
+      if (!currentStillExists) {
+        currentSessionId = null;
+        messages = [];
+        const fallbackSession = activeSessions[0];
+        if (fallbackSession) {
+          selectSession(fallbackSession.id);
+        } else {
+          renderSessionList();
+          renderMessages();
+          refreshComposerState();
+        }
+      } else {
+        renderSessionList();
+        refreshComposerState();
+      }
     }
   } catch (error) {
     console.error('Sync iFlow history sessions error:', error);
@@ -2160,8 +2103,52 @@ async function loadIflowHistoryMessagesForSession(session: Session): Promise<voi
     }
   } catch (error) {
     console.error('Load iFlow history messages error:', error);
+    const detail = String(error);
+    const isMissingHistoryFile =
+      session.source === 'iflow-log' && detail.includes('Session file not found for');
+
+    if (isMissingHistoryFile) {
+      const scopedSessions = sessionsByAgent[session.agentId] || [];
+      const filtered = scopedSessions.filter((item) => item.id !== session.id);
+      if (filtered.length !== scopedSessions.length) {
+        sessionsByAgent[session.agentId] = filtered;
+        delete messagesBySession[session.id];
+
+        if (sessionsByAgent[session.agentId].length === 0) {
+          const fallback = createSession(session.agentId, '默认会话');
+          sessionsByAgent[session.agentId].push(fallback);
+          messagesBySession[fallback.id] = [];
+        }
+
+        await saveSessions();
+        await saveSessionMessages();
+      }
+
+      if (currentAgentId === session.agentId) {
+        const scoped = getSessionsForAgent(session.agentId);
+        const currentStillExists =
+          Boolean(currentSessionId) && scoped.some((item) => item.id === currentSessionId);
+        if (!currentStillExists) {
+          currentSessionId = null;
+          messages = [];
+          const fallbackSession = scoped[0];
+          if (fallbackSession) {
+            selectSession(fallbackSession.id);
+          } else {
+            renderSessionList();
+            renderMessages();
+            refreshComposerState();
+          }
+        } else {
+          renderSessionList();
+        }
+      }
+
+      showError('该历史会话文件已不存在，已从列表移除');
+      return;
+    }
+
     if (currentSessionId === session.id) {
-      const detail = String(error);
       messages = [
         {
           id: `msg-${Date.now()}-history-load-failed`,
@@ -2535,12 +2522,6 @@ function updateConnectionStatus(connected: boolean) {
 // 发送消息
 let messageTimeout: number | null = null;
 const MESSAGE_TIMEOUT_MS = 60000;
-
-interface ParsedModelSlashCommand {
-  kind: 'help' | 'switch' | 'current';
-  targetModel?: string;
-  filterKeyword?: string;
-}
 
 function parseModelSlashCommand(content: string): ParsedModelSlashCommand | null {
   const trimmed = content.trim();
