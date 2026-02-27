@@ -1,5 +1,13 @@
 // iFlow Workspace - Main Entry
-import { listen } from '@tauri-apps/api/event';
+import {
+  onStreamMessage,
+  onToolCall,
+  onCommandRegistry,
+  onModelRegistry,
+  onAcpSession,
+  onTaskFinish,
+  onAgentError,
+} from './services/events';
 import {
   convertFileSrc,
   getVersion,
@@ -248,8 +256,7 @@ function isCurrentAgentBusy(): boolean {
 function setupTauriEventListeners() {
   console.log('Setting up Tauri event listeners...');
 
-  listen('stream-message', (event) => {
-    const payload = event.payload as { agentId?: string; content?: string; type?: StreamMessageType };
+  onStreamMessage((payload) => {
     if (!payload.agentId || !payload.content) {
       return;
     }
@@ -270,19 +277,13 @@ function setupTauriEventListeners() {
     appendStreamMessage(payload.agentId, targetSessionId, payload.content, payload.type);
   });
 
-  listen('tool-call', (event) => {
-    const payload = event.payload as { agentId?: string; toolCalls?: ToolCall[] };
+  onToolCall((payload) => {
     if (payload.agentId && Array.isArray(payload.toolCalls)) {
       mergeToolCalls(payload.agentId, payload.toolCalls);
     }
   });
 
-  listen('command-registry', (event) => {
-    const payload = event.payload as {
-      agentId?: string;
-      commands?: unknown[];
-      mcpServers?: unknown[];
-    };
+  onCommandRegistry((payload) => {
     if (!payload.agentId) {
       return;
     }
@@ -290,12 +291,7 @@ function setupTauriEventListeners() {
     applyAgentRegistry(payload.agentId, payload.commands, payload.mcpServers);
   });
 
-  listen('model-registry', (event) => {
-    const payload = event.payload as {
-      agentId?: string;
-      models?: unknown[];
-      currentModel?: unknown;
-    };
+  onModelRegistry((payload) => {
     if (!payload.agentId) {
       return;
     }
@@ -303,16 +299,14 @@ function setupTauriEventListeners() {
     applyAgentModelRegistry(payload.agentId, payload.models, payload.currentModel);
   });
 
-  listen('acp-session', (event) => {
-    const payload = event.payload as { agentId?: string; sessionId?: string };
+  onAcpSession((payload) => {
     if (!payload.agentId || !payload.sessionId) {
       return;
     }
     applyAcpSessionBinding(payload.agentId, payload.sessionId);
   });
 
-  listen('task-finish', (event) => {
-    const payload = event.payload as { agentId?: string };
+  onTaskFinish((payload) => {
     if (!payload.agentId) {
       return;
     }
@@ -342,8 +336,7 @@ function setupTauriEventListeners() {
     }
   });
 
-  listen('agent-error', (event) => {
-    const payload = event.payload as { agentId?: string; error?: string };
+  onAgentError((payload) => {
     if (payload.agentId) {
       delete inflightSessionByAgent[payload.agentId];
     }
