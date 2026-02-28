@@ -373,9 +373,28 @@ export function updateCurrentAgentModelUI() {
 // ── Agent list UI ─────────────────────────────────────────────────────────────
 
 export function onAgentListClick(event: MouseEvent) {
-  const target = event.target as HTMLElement;
+  const rawTarget = event.target;
+  const target =
+    rawTarget instanceof Element
+      ? rawTarget
+      : rawTarget instanceof Node
+      ? rawTarget.parentElement
+      : null;
+  if (!target) {
+    return;
+  }
+
+  const deleteBtn = target.closest('button.btn-delete[data-agent-id]') as HTMLButtonElement | null;
+  if (deleteBtn?.dataset.agentId) {
+    event.preventDefault();
+    event.stopPropagation();
+    void deleteAgent(deleteBtn.dataset.agentId);
+    return;
+  }
+
   const actionBtn = target.closest('button[data-action]') as HTMLButtonElement | null;
   if (actionBtn) {
+    event.preventDefault();
     event.stopPropagation();
     const action = actionBtn.dataset.action;
     const agentId = actionBtn.dataset.agentId;
@@ -399,6 +418,23 @@ export function onAgentListClick(event: MouseEvent) {
   const agentItem = target.closest('.agent-item[data-agent-id]') as HTMLDivElement | null;
   if (agentItem?.dataset.agentId) {
     selectAgent(agentItem.dataset.agentId);
+  }
+}
+
+function handleAgentAction(action: string, agentId: string) {
+  if (!agentId) {
+    return;
+  }
+  if (action === 'delete') {
+    void deleteAgent(agentId);
+    return;
+  }
+  if (action === 'rename') {
+    void renameAgent(agentId);
+    return;
+  }
+  if (action === 'reconnect') {
+    void reconnectAgent(agentId);
   }
 }
 
@@ -503,17 +539,19 @@ export function selectAgent(agentId: string) {
 }
 
 export async function deleteAgent(agentId: string) {
-  if (!confirm('确定要删除这个 Agent 吗？')) {
+  const agent = state.agents.find((a) => a.id === agentId);
+  if (!agent) {
+    showError('未找到对应 Agent，删除失败');
     return;
   }
 
-  const agent = state.agents.find((a) => a.id === agentId);
-  if (agent?.status === 'connected') {
-    try {
-      await disconnectAgent(agentId);
-    } catch (e) {
+  const deletingCurrentAgent = state.currentAgentId === agentId;
+
+  if (agent.status === 'connected') {
+    // 断开连接放到后台执行，避免接口卡住导致删除按钮看起来“无响应”。
+    void disconnectAgent(agentId).catch((e) => {
       console.error('断开连接失败:', e);
-    }
+    });
   }
 
   state.agents = state.agents.filter((a) => a.id !== agentId);
@@ -525,23 +563,17 @@ export async function deleteAgent(agentId: string) {
   delete state.toolCallsByAgent[agentId];
   delete state.modelOptionsCacheByAgent[agentId];
 
-  const { clearArtifactPreviewCacheForAgent, closeArtifactPreviewModal, renderMessages } = await import('../ui');
-  const { refreshComposerState } = await import('../app');
-  clearArtifactPreviewCacheForAgent(agentId);
-
   const removedSessions = state.sessionsByAgent[agentId] || [];
   delete state.sessionsByAgent[agentId];
   for (const session of removedSessions) {
     delete state.messagesBySession[session.id];
   }
 
-  if (state.currentAgentId === agentId) {
+  if (deletingCurrentAgent) {
     closeCurrentAgentModelMenu();
-    closeArtifactPreviewModal();
     state.currentAgentId = null;
     state.currentSessionId = null;
     state.messages = [];
-    renderMessages();
     toolCallsPanelEl.classList.add('hidden');
     currentAgentNameEl.textContent = '选择一个 Agent';
     updateAgentStatusUI('disconnected');
@@ -554,7 +586,19 @@ export async function deleteAgent(agentId: string) {
   await saveSessionMessages();
   renderAgentList();
   renderSessionList();
-  refreshComposerState();
+  showSuccess(`Agent "${agent.name}" 已删除`);
+
+  void import('../ui').then(({ clearArtifactPreviewCacheForAgent, closeArtifactPreviewModal, renderMessages }) => {
+    clearArtifactPreviewCacheForAgent(agentId);
+    if (deletingCurrentAgent) {
+      closeArtifactPreviewModal();
+      renderMessages();
+    }
+  });
+
+  void import('../app').then(({ refreshComposerState }) => {
+    refreshComposerState();
+  });
 }
 
 export async function renameAgent(agentId: string) {
@@ -636,6 +680,18 @@ export function renderAgentList() {
   `
     )
     .join('');
+
+  // 显式绑定按钮事件，避免某些 WebView 下委托 click 命中不稳定。
+  const actionButtons = agentListEl.querySelectorAll('button[data-action][data-agent-id]');
+  actionButtons.forEach((button) => {
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const action = button.getAttribute('data-action') || '';
+      const agentId = button.getAttribute('data-agent-id') || '';
+      handleAgentAction(action, agentId);
+    });
+  });
 }
 
 export async function reconnectAgent(agentId: string) {
