@@ -20,7 +20,7 @@ import {
   saveSessions,
   saveSessionMessages,
 } from '../storage';
-import { showError } from '../agents';
+import { showError, showSuccess } from '../agents';
 
 // ── Title generation constants ────────────────────────────────────────────────
 
@@ -114,12 +114,10 @@ export async function clearCurrentAgentSessions() {
     showError('当前 Agent 不存在');
     return;
   }
-  if (!confirm(`确定要清除当前 Agent（${agent.workspacePath}）的所有会话记录吗？`)) {
-    return;
-  }
 
+  let deletedHistoryCount = 0;
   try {
-    await clearIflowHistorySessions(agent.workspacePath);
+    deletedHistoryCount = await clearIflowHistorySessions(agent.workspacePath);
   } catch (error) {
     console.error('Clear iFlow history sessions error:', error);
     showError(`清除磁盘历史记录失败: ${String(error)}`);
@@ -153,6 +151,7 @@ export async function clearCurrentAgentSessions() {
   renderSessionList();
   renderMessages();
   refreshComposerState();
+  showSuccess(`已清除当前 Agent 会话（磁盘历史 ${deletedHistoryCount} 条）`);
 }
 
 // ── Session list rendering ────────────────────────────────────────────────────
