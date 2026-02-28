@@ -2,7 +2,11 @@
 
 基于 Tauri 2.0 的多 Agent 桌面工作台，当前重点是 iFlow ACP 协议接入、历史会话管理与可视化交互。
 
-当前版本：`v0.3.1`
+当前版本：`v0.3.3`
+
+Icon 标识：`已更新`
+
+![flow hub app icon](src-tauri/icons/icon.png)
 
 ## 核心能力
 

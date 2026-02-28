@@ -1,6 +1,11 @@
 // iFlow Workspace - Tauri Backend
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use tauri::Manager;
+
 mod agents;
 mod artifact;
 mod commands;
@@ -14,7 +19,8 @@ mod storage;
 
 use artifact::{read_html_artifact, resolve_html_artifact_path};
 use commands::{
-    connect_iflow, disconnect_agent, send_message, stop_message, switch_agent_model,
+    connect_iflow, disconnect_agent, send_message, shutdown_all_agents, stop_message,
+    switch_agent_model,
 };
 use model_resolver::list_available_models;
 use history::{
@@ -25,7 +31,7 @@ use state::AppState;
 use storage::{load_storage_snapshot, save_storage_snapshot};
 
 fn main() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             connect_iflow,
@@ -43,6 +49,19 @@ fn main() {
             load_storage_snapshot,
             save_storage_snapshot,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    let cleanup_done = Arc::new(AtomicBool::new(false));
+
+    app.run(move |app_handle, event| {
+        if matches!(event, tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit)
+            && cleanup_done
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+        {
+            let state = app_handle.state::<AppState>();
+            tauri::async_runtime::block_on(shutdown_all_agents(&state));
+        }
+    });
 }

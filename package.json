@@ -1,6 +1,6 @@
 {
   "name": "iflow-workspace",
-  "version": "0.3.1",
+  "version": "0.3.3",
   "description": "Multi-Agent Desktop App for iFlow",
   "type": "module",
   "scripts": {
@@ -8,8 +8,11 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:dev": "npm run clean && tauri dev",
+    "tauri:build": "tauri build",
+    "kill": "npm run clean",
+    "dev:clean": "npm run tauri:dev",
+    "clean": "./scripts/clean-dev.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

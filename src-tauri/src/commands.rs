@@ -1,12 +1,58 @@
 use std::process::Stdio;
 
 use tauri::State;
-use tokio::process::Command;
+use tokio::process::{Child, Command};
 use tokio::time::{timeout, Duration};
 
 use crate::agents::iflow_adapter::{find_available_port, message_listener_task};
 use crate::models::{AgentInfo, AgentStatus, ConnectResponse, ListenerCommand};
 use crate::state::{AgentInstance, AppState};
+
+async fn terminate_agent_process(process: &mut Child) {
+    let pid = process.id();
+
+    #[cfg(unix)]
+    if let Some(pid) = pid {
+        let pid = pid.to_string();
+        let _ = Command::new("pkill")
+            .arg("-TERM")
+            .arg("-P")
+            .arg(&pid)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+    }
+
+    let _ = process.kill().await;
+    let _ = timeout(Duration::from_secs(2), process.wait()).await;
+
+    #[cfg(unix)]
+    if let Some(pid) = pid {
+        let pid = pid.to_string();
+        let _ = Command::new("pkill")
+            .arg("-KILL")
+            .arg("-P")
+            .arg(&pid)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+    }
+}
+
+async fn terminate_agent_instance(instance: &mut AgentInstance) {
+    if let Some(mut process) = instance.process.take() {
+        terminate_agent_process(&mut process).await;
+    }
+}
+
+pub async fn shutdown_all_agents(state: &AppState) {
+    let mut instances = state.agent_manager.take_all().await;
+    for instance in &mut instances {
+        terminate_agent_instance(instance).await;
+    }
+}
 
 async fn spawn_iflow_agent(
     app_handle: tauri::AppHandle,
@@ -192,9 +238,7 @@ pub async fn switch_agent_model(
     }
 
     if let Some(mut instance) = state.agent_manager.remove(&agent_id).await {
-        if let Some(mut process) = instance.process.take() {
-            let _ = process.kill().await;
-        }
+        terminate_agent_instance(&mut instance).await;
     }
 
     spawn_iflow_agent(
@@ -288,12 +332,9 @@ pub async fn disconnect_agent(state: State<'_, AppState>, agent_id: String) -> R
     println!("Disconnecting agent: {}", agent_id);
 
     if let Some(mut instance) = state.agent_manager.remove(&agent_id).await {
-        if let Some(mut process) = instance.process.take() {
-            let _ = process.kill().await;
-        }
+        terminate_agent_instance(&mut instance).await;
         println!("Agent {} disconnected", agent_id);
     }
 
     Ok(())
 }
-

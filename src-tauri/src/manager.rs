@@ -45,6 +45,11 @@ impl AgentManager {
         agents.remove(agent_id)
     }
 
+    pub async fn take_all(&self) -> Vec<AgentInstance> {
+        let mut agents = self.agents.write().await;
+        agents.drain().map(|(_, instance)| instance).collect()
+    }
+
     pub async fn port_of(&self, agent_id: &str) -> Option<u16> {
         let agents = self.agents.read().await;
         agents.get(agent_id).map(|instance| instance.port)
