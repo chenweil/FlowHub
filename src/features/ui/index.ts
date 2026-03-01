@@ -1,14 +1,16 @@
 // src/features/ui/index.ts — UI rendering, artifact preview, and chat interaction
 import {
   convertFileSrc,
+  loadGitFileDiff,
   readHtmlArtifact,
   resolveHtmlArtifactPath,
 } from '../../services/tauri';
 import { formatTime } from '../../lib/utils';
 import { escapeHtml } from '../../lib/html';
 import { formatMessageContent } from '../../lib/markdown';
-import type { ToolCall } from '../../types';
+import type { ToolCall, GitFileChange, GitStatus } from '../../types';
 import { state } from '../../store';
+import { TIMEOUTS } from '../../config';
 import {
   chatMessagesEl,
   artifactPreviewModalEl,
@@ -16,6 +18,13 @@ import {
   artifactPreviewFrameEl,
   toolCallsPanelEl,
   toolCallsListEl,
+  gitChangesPanelEl,
+  gitChangesListEl,
+  gitChangesRefreshTimeEl,
+  refreshGitChangesBtnEl,
+  gitDiffModalEl,
+  gitDiffPathEl,
+  gitDiffContentEl,
 } from '../../dom';
 import { persistCurrentSessionMessages } from '../storage';
 import { showError, isCurrentAgentBusy } from '../agents';
@@ -30,7 +39,8 @@ const HTML_ARTIFACT_GENERIC_PATH_PATTERN =
   /(?:file:\/\/)?(?:[A-Za-z]:[\\/]|\/|\.{1,2}\/|~\/)[^\s"'`<>|]+\.html?/gi;
 const HTML_ARTIFACT_BARE_FILE_PATTERN = /[^\s"'`<>|/\\]+\.html?/gi;
 const ARTIFACT_PREVIEW_CACHE_LIMIT = 8;
-const ARTIFACT_PREVIEW_READ_TIMEOUT_MS = 12000;
+const ARTIFACT_PREVIEW_READ_TIMEOUT_MS = TIMEOUTS.artifactPreview;
+const GIT_DIFF_READ_TIMEOUT_MS = TIMEOUTS.gitDiff;
 const ARTIFACT_PREVIEW_CACHE_URL_PREFIX = 'url:';
 const ARTIFACT_PREVIEW_CACHE_HTML_PREFIX = 'html:';
 
@@ -326,6 +336,84 @@ export function closeArtifactPreviewModal() {
   artifactPreviewPathEl.textContent = '';
 }
 
+export function closeGitDiffModal() {
+  gitDiffModalEl.classList.add('hidden');
+  gitDiffPathEl.textContent = '';
+  gitDiffContentEl.textContent = '';
+}
+
+export function createGitDiffTimeoutPromise(): Promise<never> {
+  return new Promise<never>((_resolve, reject) => {
+    window.setTimeout(() => {
+      reject(new Error(`读取超时（>${GIT_DIFF_READ_TIMEOUT_MS / 1000}s）`));
+    }, GIT_DIFF_READ_TIMEOUT_MS);
+  });
+}
+
+export function classifyDiffLine(line: string): string {
+  if (line.startsWith('+') && !line.startsWith('+++')) {
+    return 'diff-line-add';
+  }
+  if (line.startsWith('-') && !line.startsWith('---')) {
+    return 'diff-line-del';
+  }
+  if (line.startsWith('@@')) {
+    return 'diff-line-hunk';
+  }
+  if (
+    line.startsWith('diff --git') ||
+    line.startsWith('index ') ||
+    line.startsWith('--- ') ||
+    line.startsWith('+++ ')
+  ) {
+    return 'diff-line-meta';
+  }
+  if (line === '[暂存区]' || line === '[工作区]') {
+    return 'diff-line-section';
+  }
+  return '';
+}
+
+export function renderGitDiffHtml(diff: string): string {
+  const normalized = diff.replace(/\r\n/g, '\n');
+  const lines = normalized.split('\n');
+  return lines
+    .map((line) => {
+      const cls = classifyDiffLine(line);
+      const escapedLine = escapeHtml(line.length === 0 ? ' ' : line);
+      return cls ? `<span class="diff-line ${cls}">${escapedLine}</span>` : `<span class="diff-line">${escapedLine}</span>`;
+    })
+    .join('\n');
+}
+
+export async function openGitDiffPreview(path: string) {
+  const agent = state.currentAgentId ? state.agents.find((item) => item.id === state.currentAgentId) : null;
+  if (!agent) {
+    showError('请先选择 Agent');
+    return;
+  }
+
+  const normalizedPath = path.trim();
+  if (!normalizedPath) {
+    showError('无效的文件路径');
+    return;
+  }
+
+  gitDiffModalEl.classList.remove('hidden');
+  gitDiffPathEl.textContent = normalizedPath;
+  gitDiffContentEl.textContent = '正在读取 diff...';
+
+  try {
+    const diff = await Promise.race([
+      loadGitFileDiff(agent.workspacePath, normalizedPath),
+      createGitDiffTimeoutPromise(),
+    ]);
+    gitDiffContentEl.innerHTML = renderGitDiffHtml(diff);
+  } catch (error) {
+    gitDiffContentEl.textContent = `读取 diff 失败: ${String(error)}`;
+  }
+}
+
 export async function openArtifactPreview(path: string) {
   const agent = state.currentAgentId ? state.agents.find((item) => item.id === state.currentAgentId) : null;
   if (!agent || agent.status !== 'connected') {
@@ -501,13 +589,118 @@ export function onToolCallsClick(event: MouseEvent) {
   void openArtifactPreview(path);
 }
 
+export function onGitChangesClick(event: MouseEvent) {
+  const target = event.target as HTMLElement;
+  const changeBtn = target.closest('button[data-git-change-path]') as HTMLButtonElement | null;
+  const encodedPath = changeBtn?.dataset.gitChangePath;
+  if (!encodedPath) {
+    return;
+  }
+
+  const path = decodeArtifactPath(encodedPath);
+  if (!path) {
+    return;
+  }
+
+  event.preventDefault();
+  void openGitDiffPreview(path);
+}
+
 // ── Tool calls display ────────────────────────────────────────────────────────
 
+const GIT_STATUS_LABEL_MAP: Readonly<Record<GitStatus, string>> = {
+  none: '无变更',
+  modified: '已修改',
+  added: '已新增',
+  deleted: '已删除',
+  renamed: '已重命名',
+  copied: '已复制',
+  unmerged: '冲突',
+  untracked: '未跟踪',
+  ignored: '已忽略',
+  unknown: '未知',
+};
+
+export function gitStatusLabel(status: GitStatus): string {
+  return GIT_STATUS_LABEL_MAP[status] || '未知';
+}
+
+export function renderGitStatusChip(prefix: string, status: GitStatus): string {
+  if (!status || status === 'none') {
+    return '';
+  }
+
+  const className = `git-status-chip ${escapeHtml(status)}`;
+  return `<span class="${className}">${escapeHtml(prefix)}:${escapeHtml(gitStatusLabel(status))}</span>`;
+}
+
+export function formatGitRefreshTime(lastRefreshedAt?: number): string {
+  if (!lastRefreshedAt || Number.isNaN(lastRefreshedAt)) {
+    return '未刷新';
+  }
+  return `更新于 ${formatTime(new Date(lastRefreshedAt))}`;
+}
+
+export function showGitChanges(
+  changes: GitFileChange[],
+  options?: {
+    loading?: boolean;
+    error?: string;
+    lastRefreshedAt?: number;
+    disableRefresh?: boolean;
+  }
+) {
+  const loading = Boolean(options?.loading);
+  const error = options?.error?.trim() || '';
+  const disableRefresh = Boolean(options?.disableRefresh);
+
+  refreshGitChangesBtnEl.disabled = loading || disableRefresh;
+  gitChangesRefreshTimeEl.textContent = formatGitRefreshTime(options?.lastRefreshedAt);
+  gitChangesPanelEl.classList.remove('hidden');
+
+  if (loading) {
+    gitChangesListEl.innerHTML = '<div class="git-changes-state">正在读取 Git 变更...</div>';
+    return;
+  }
+
+  if (error) {
+    gitChangesListEl.innerHTML = `<div class="git-changes-state">${escapeHtml(error)}</div>`;
+    return;
+  }
+
+  if (changes.length === 0) {
+    gitChangesListEl.innerHTML = '<div class="git-changes-state">当前工作目录没有未提交变更。</div>';
+    return;
+  }
+
+  gitChangesListEl.innerHTML = changes
+    .map((change) => {
+      const stagedChip = renderGitStatusChip('暂存', change.stagedStatus);
+      const unstagedChip = renderGitStatusChip('工作区', change.unstagedStatus);
+      const chips = `${stagedChip}${unstagedChip}`.trim();
+      const encodedPath = encodeURIComponent(change.path);
+
+      return `
+        <button type="button" class="git-change-item" data-git-change-path="${encodedPath}" title="点击查看 diff">
+          <div class="git-change-path">${escapeHtml(change.path)}</div>
+          <div class="git-change-status">${chips}</div>
+        </button>
+      `;
+    })
+    .join('');
+}
+
 // 显示工具调用
-export function showToolCalls(toolCalls: ToolCall[]) {
+export function showToolCalls(toolCalls: ToolCall[], options?: { forceOpen?: boolean }) {
+  const forceOpen = Boolean(options?.forceOpen);
   if (toolCalls.length === 0) {
-    toolCallsPanelEl.classList.add('hidden');
-    toolCallsListEl.innerHTML = '';
+    if (!forceOpen) {
+      toolCallsPanelEl.classList.add('hidden');
+      toolCallsListEl.innerHTML = '';
+      return;
+    }
+    toolCallsListEl.innerHTML = '<div class="tool-calls-state">当前会话暂无工具调用记录。</div>';
+    toolCallsPanelEl.classList.remove('hidden');
     return;
   }
 

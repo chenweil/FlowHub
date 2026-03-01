@@ -13,6 +13,7 @@ import {
   sendMessage as tauriSendMessage,
   stopMessage,
 } from '../services/tauri';
+import { TIMEOUTS } from '../config';
 import { generateAcpSessionId, streamTypeToRole } from '../lib/utils';
 import { escapeHtml } from '../lib/html';
 import type { Message, SlashMenuItem, ComposerState, StreamMessageType, ThemeMode } from '../types';
@@ -35,9 +36,14 @@ import {
   renameAgentNameInputEl,
   currentAgentModelBtnEl,
   currentAgentModelMenuEl,
+  openToolCallsBtnEl,
+  openGitChangesBtnEl,
   toolCallsPanelEl,
   toolCallsListEl,
   closeToolPanelBtnEl,
+  gitChangesListEl,
+  refreshGitChangesBtnEl,
+  closeGitChangesPanelBtnEl,
   newSessionBtnEl,
   clearChatBtnEl,
   clearAllSessionsBtnEl,
@@ -45,6 +51,8 @@ import {
   slashCommandMenuEl,
   artifactPreviewModalEl,
   closeArtifactPreviewBtnEl,
+  gitDiffModalEl,
+  closeGitDiffBtnEl,
   themeToggleBtnEl,
   appVersionEl,
 } from '../dom';
@@ -74,11 +82,15 @@ import {
   submitRenameAgent,
   mergeToolCalls,
   resetToolCallsForAgent,
+  openCurrentAgentToolCallsPanel,
   closeCurrentAgentModelMenu,
   toggleCurrentAgentModelMenu,
   onCurrentAgentModelMenuClick,
   handleLocalModelCommand,
   syncAgentModelFromAboutContent,
+  refreshAgentGitChanges,
+  refreshCurrentAgentGitChanges,
+  showGitChangesForAgent,
   showError,
 } from './agents';
 import {
@@ -87,6 +99,8 @@ import {
   onChatMessagesClick,
   onToolCallsClick,
   closeArtifactPreviewModal,
+  closeGitDiffModal,
+  onGitChangesClick,
 } from './ui';
 
 const SEND_BUTTON_SEND_ICON = `
@@ -269,6 +283,7 @@ export function setupTauriEventListeners() {
       state.messages = state.messages.filter((m) => !m.id.includes('-sending') && !m.id.includes('-processing'));
       renderMessages();
       refreshComposerState();
+      void refreshAgentGitChanges(payload.agentId);
     } else if (targetSessionId) {
       const sessionMessages = getMessagesForSession(targetSessionId).filter(
         (m) => !m.id.includes('-sending') && !m.id.includes('-processing')
@@ -578,6 +593,21 @@ export function setupEventListeners() {
     applyTheme(state.currentTheme);
     localStorage.setItem(THEME_STORAGE_KEY, state.currentTheme);
   });
+  openToolCallsBtnEl.addEventListener('click', () => {
+    if (!state.currentAgentId) {
+      showError('请先选择 Agent');
+      return;
+    }
+    openCurrentAgentToolCallsPanel();
+  });
+  openGitChangesBtnEl.addEventListener('click', () => {
+    if (!state.currentAgentId) {
+      showError('请先选择 Agent');
+      return;
+    }
+    showGitChangesForAgent(state.currentAgentId);
+    void refreshCurrentAgentGitChanges();
+  });
 
   addAgentBtnEl.addEventListener('click', () => {
     addAgentModalEl.classList.remove('hidden');
@@ -586,13 +616,23 @@ export function setupEventListeners() {
   closeModalBtnEl.addEventListener('click', hideModal);
   cancelAddAgentBtnEl.addEventListener('click', hideModal);
   closeArtifactPreviewBtnEl.addEventListener('click', closeArtifactPreviewModal);
+  closeGitDiffBtnEl.addEventListener('click', closeGitDiffModal);
   artifactPreviewModalEl.addEventListener('click', (event) => {
     if (event.target === artifactPreviewModalEl) {
       closeArtifactPreviewModal();
     }
   });
+  gitDiffModalEl.addEventListener('click', (event) => {
+    if (event.target === gitDiffModalEl) {
+      closeGitDiffModal();
+    }
+  });
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') {
+      return;
+    }
+    if (!gitDiffModalEl.classList.contains('hidden')) {
+      closeGitDiffModal();
       return;
     }
     if (!artifactPreviewModalEl.classList.contains('hidden')) {
@@ -690,6 +730,7 @@ export function setupEventListeners() {
   });
   chatMessagesEl.addEventListener('click', onChatMessagesClick);
   toolCallsListEl.addEventListener('click', onToolCallsClick);
+  gitChangesListEl.addEventListener('click', onGitChangesClick);
   currentAgentModelBtnEl.addEventListener('click', (event) => {
     event.stopPropagation();
     void toggleCurrentAgentModelMenu();
@@ -705,6 +746,12 @@ export function setupEventListeners() {
   clearChatBtnEl.addEventListener('click', clearChat);
   closeToolPanelBtnEl.addEventListener('click', () => {
     toolCallsPanelEl.classList.add('hidden');
+  });
+  closeGitChangesPanelBtnEl.addEventListener('click', () => {
+    closeGitChangesPanelBtnEl.closest('.git-changes-panel')?.classList.add('hidden');
+  });
+  refreshGitChangesBtnEl.addEventListener('click', () => {
+    void refreshCurrentAgentGitChanges();
   });
 
   clearAllSessionsBtnEl.addEventListener('click', () => {
@@ -762,7 +809,7 @@ export async function retryUserMessageById(messageId: string) {
 }
 
 // 发送消息
-const MESSAGE_TIMEOUT_MS = 60000;
+const MESSAGE_TIMEOUT_MS = TIMEOUTS.messageSend;
 
 export async function sendMessage() {
   const content = messageInputEl.value.trim();

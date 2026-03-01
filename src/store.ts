@@ -1,5 +1,15 @@
 // src/store.ts — centralized application state
-import type { Agent, Session, Message, ToolCall, AgentRegistry, ModelOption, SlashMenuItem, ThemeMode } from './types';
+import type {
+  Agent,
+  Session,
+  Message,
+  ToolCall,
+  AgentRegistry,
+  ModelOption,
+  SlashMenuItem,
+  ThemeMode,
+  GitFileChange,
+} from './types';
 
 export const state = {
   // ── 核心实体 ──────────────────────────────────────────────────────────────
@@ -15,6 +25,10 @@ export const state = {
   registryByAgent: {} as Record<string, AgentRegistry>,
   toolCallsByAgent: {} as Record<string, ToolCall[]>,
   modelOptionsCacheByAgent: {} as Record<string, ModelOption[]>,
+  gitChangesByAgent: {} as Record<string, GitFileChange[]>,
+  gitChangesLoadingByAgent: {} as Record<string, boolean>,
+  gitChangesErrorByAgent: {} as Record<string, string>,
+  gitChangesLastRefreshedAtByAgent: {} as Record<string, number>,
 
   // ── UI 交互状态 ────────────────────────────────────────────────────────────
   modelSelectorOpen: false,

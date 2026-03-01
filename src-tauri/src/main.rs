@@ -1,14 +1,15 @@
 // iFlow Workspace - Tauri Backend
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use tauri::Manager;
 
 mod agents;
 mod artifact;
 mod commands;
+mod git;
 mod history;
 mod manager;
 mod model_resolver;
@@ -22,11 +23,12 @@ use commands::{
     connect_iflow, disconnect_agent, send_message, shutdown_all_agents, stop_message,
     switch_agent_model,
 };
-use model_resolver::list_available_models;
+use git::{list_git_changes, load_git_file_diff};
 use history::{
     clear_iflow_history_sessions, delete_iflow_history_session, list_iflow_history_sessions,
     load_iflow_history_messages,
 };
+use model_resolver::list_available_models;
 use state::AppState;
 use storage::{load_storage_snapshot, save_storage_snapshot};
 
@@ -43,6 +45,8 @@ fn main() {
             load_iflow_history_messages,
             delete_iflow_history_session,
             clear_iflow_history_sessions,
+            list_git_changes,
+            load_git_file_diff,
             resolve_html_artifact_path,
             read_html_artifact,
             disconnect_agent,
@@ -55,10 +59,12 @@ fn main() {
     let cleanup_done = Arc::new(AtomicBool::new(false));
 
     app.run(move |app_handle, event| {
-        if matches!(event, tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit)
-            && cleanup_done
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok()
+        if matches!(
+            event,
+            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+        ) && cleanup_done
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
         {
             let state = app_handle.state::<AppState>();
             tauri::async_runtime::block_on(shutdown_all_agents(&state));

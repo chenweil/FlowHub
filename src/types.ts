@@ -39,6 +39,24 @@ export interface ToolCall {
   output?: string;
 }
 
+export type GitStatus =
+  | 'none'
+  | 'modified'
+  | 'added'
+  | 'deleted'
+  | 'renamed'
+  | 'copied'
+  | 'unmerged'
+  | 'untracked'
+  | 'ignored'
+  | 'unknown';
+
+export interface GitFileChange {
+  path: string;
+  stagedStatus: GitStatus;
+  unstagedStatus: GitStatus;
+}
+
 export interface RegistryCommand {
   name: string;
   description: string;

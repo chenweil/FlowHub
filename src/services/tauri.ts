@@ -6,6 +6,7 @@ import type {
   IflowHistoryMessageRecord,
   ModelOption,
   StorageSnapshot,
+  GitFileChange,
 } from '../types';
 
 export { convertFileSrc, getVersion };
@@ -98,4 +99,12 @@ export function loadStorageSnapshot(): Promise<StorageSnapshot> {
 
 export function saveStorageSnapshot(snapshot: StorageSnapshot): Promise<void> {
   return invoke('save_storage_snapshot', { snapshot });
+}
+
+export function listGitChanges(workspacePath: string): Promise<GitFileChange[]> {
+  return invoke<GitFileChange[]>('list_git_changes', { workspacePath });
+}
+
+export function loadGitFileDiff(workspacePath: string, filePath: string): Promise<string> {
+  return invoke<string>('load_git_file_diff', { workspacePath, filePath });
 }

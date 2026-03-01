@@ -3,11 +3,21 @@ import {
   connectIflow,
   disconnectAgent,
   listAvailableModels,
+  listGitChanges,
   switchAgentModel as tauriSwitchAgentModel,
 } from '../../services/tauri';
 import { shortAgentId, getWorkspaceName } from '../../lib/utils';
 import { escapeHtml } from '../../lib/html';
-import type { Agent, Message, ToolCall, RegistryCommand, RegistryMcpServer, ModelOption, ParsedModelSlashCommand } from '../../types';
+import type {
+  Agent,
+  Message,
+  ToolCall,
+  RegistryCommand,
+  RegistryMcpServer,
+  ModelOption,
+  ParsedModelSlashCommand,
+  GitFileChange,
+} from '../../types';
 import { state } from '../../store';
 import {
   agentListEl,
@@ -18,6 +28,7 @@ import {
   currentAgentModelMenuEl,
   toolCallsPanelEl,
   toolCallsListEl,
+  gitChangesPanelEl,
   clearChatBtnEl,
   connectionStatusEl,
   renameAgentNameInputEl,
@@ -245,6 +256,75 @@ export function resetToolCallsForAgent(agentId: string) {
     toolCallsListEl.innerHTML = '';
     toolCallsPanelEl.classList.add('hidden');
   }
+}
+
+export function openCurrentAgentToolCallsPanel() {
+  if (!state.currentAgentId) {
+    return;
+  }
+
+  const currentToolCalls = state.toolCallsByAgent[state.currentAgentId] || [];
+  void import('../ui').then(({ showToolCalls }) => {
+    showToolCalls(currentToolCalls, { forceOpen: true });
+  });
+}
+
+export function showGitChangesForAgent(agentId: string) {
+  if (agentId !== state.currentAgentId) {
+    return;
+  }
+  const changes = state.gitChangesByAgent[agentId] || [];
+  const loading = Boolean(state.gitChangesLoadingByAgent[agentId]);
+  const error = state.gitChangesErrorByAgent[agentId] || '';
+  const lastRefreshedAt = state.gitChangesLastRefreshedAtByAgent[agentId];
+  const disableRefresh = Boolean(state.inflightSessionByAgent[agentId]);
+
+  void import('../ui').then(({ showGitChanges }) => {
+    showGitChanges(changes, { loading, error, lastRefreshedAt, disableRefresh });
+  });
+}
+
+export function resetGitChangesForAgent(agentId: string) {
+  delete state.gitChangesByAgent[agentId];
+  delete state.gitChangesLoadingByAgent[agentId];
+  delete state.gitChangesErrorByAgent[agentId];
+  delete state.gitChangesLastRefreshedAtByAgent[agentId];
+  if (agentId === state.currentAgentId) {
+    gitChangesPanelEl.classList.add('hidden');
+  }
+}
+
+export async function refreshAgentGitChanges(agentId: string) {
+  const agent = state.agents.find((item) => item.id === agentId);
+  if (!agent) {
+    console.warn(`refreshAgentGitChanges: agent not found (${agentId})`);
+    return;
+  }
+
+  state.gitChangesLoadingByAgent[agentId] = true;
+  state.gitChangesErrorByAgent[agentId] = '';
+  showGitChangesForAgent(agentId);
+
+  try {
+    const changes = await listGitChanges(agent.workspacePath);
+    const normalized: GitFileChange[] = Array.isArray(changes) ? changes : [];
+    state.gitChangesByAgent[agentId] = normalized;
+    state.gitChangesErrorByAgent[agentId] = '';
+  } catch (error) {
+    state.gitChangesByAgent[agentId] = [];
+    state.gitChangesErrorByAgent[agentId] = String(error);
+  } finally {
+    state.gitChangesLoadingByAgent[agentId] = false;
+    state.gitChangesLastRefreshedAtByAgent[agentId] = Date.now();
+    showGitChangesForAgent(agentId);
+  }
+}
+
+export async function refreshCurrentAgentGitChanges() {
+  if (!state.currentAgentId) {
+    return;
+  }
+  await refreshAgentGitChanges(state.currentAgentId);
 }
 
 // ── Model selector ────────────────────────────────────────────────────────────
@@ -483,8 +563,9 @@ export async function addAgent(name: string, iflowPath: string, workspacePath: s
 export function selectAgent(agentId: string) {
   closeCurrentAgentModelMenu();
   if (state.currentAgentId && state.currentAgentId !== agentId) {
-    void import('../ui').then(({ closeArtifactPreviewModal }) => {
+    void import('../ui').then(({ closeArtifactPreviewModal, closeGitDiffModal }) => {
       closeArtifactPreviewModal();
+      closeGitDiffModal();
     });
   }
   state.currentAgentId = agentId;
@@ -528,6 +609,7 @@ export function selectAgent(agentId: string) {
   void import('../app').then(({ refreshComposerState }) => {
     refreshComposerState();
   });
+  void refreshAgentGitChanges(agent.id);
   if (isConnected) {
     void syncIflowHistorySessions(agent);
     void loadAgentModelOptions(agent).then(() => {
@@ -562,6 +644,7 @@ export async function deleteAgent(agentId: string) {
   delete state.registryByAgent[agentId];
   delete state.toolCallsByAgent[agentId];
   delete state.modelOptionsCacheByAgent[agentId];
+  resetGitChangesForAgent(agentId);
 
   const removedSessions = state.sessionsByAgent[agentId] || [];
   delete state.sessionsByAgent[agentId];
@@ -575,6 +658,7 @@ export async function deleteAgent(agentId: string) {
     state.currentSessionId = null;
     state.messages = [];
     toolCallsPanelEl.classList.add('hidden');
+    gitChangesPanelEl.classList.add('hidden');
     currentAgentNameEl.textContent = '选择一个 Agent';
     updateAgentStatusUI('disconnected');
     updateCurrentAgentModelUI();

@@ -64,7 +64,9 @@
             </div>
           </div>
           <div class="toolbar-actions">
-            <button id="theme-toggle-btn" class="btn-icon" title="跟随系统">◑</button>
+            <button id="theme-toggle-btn" class="btn-icon" title="跟随系统" aria-label="切换主题">◑</button>
+            <button id="open-tool-calls-btn" class="btn-secondary" aria-label="打开工具调用面板">工具调用</button>
+            <button id="open-git-changes-btn" class="btn-secondary" aria-label="打开文件变更面板">文件变更</button>
             <button id="new-session-btn" class="btn-secondary" disabled>新建会话</button>
             <button id="clear-chat-btn" class="btn-secondary" disabled>清空当前会话</button>
           </div>
@@ -83,10 +85,26 @@
           <div id="tool-calls-panel" class="tool-calls-panel hidden">
             <div class="tool-calls-header">
               <h4>🔧 工具调用</h4>
-              <button id="close-tool-panel" class="btn-icon">×</button>
+              <button id="close-tool-panel" class="btn-icon" aria-label="关闭工具调用面板">×</button>
             </div>
             <div id="tool-calls-list" class="tool-calls-list">
               <!-- 工具调用将在这里显示 -->
+            </div>
+          </div>
+
+          <div id="git-changes-panel" class="git-changes-panel hidden">
+            <div class="git-changes-header">
+              <div class="git-changes-title-row">
+                <h4>📝 文件变更</h4>
+                <span id="git-changes-refresh-time" class="git-changes-refresh-time">未刷新</span>
+              </div>
+              <div class="git-changes-actions">
+                <button id="refresh-git-changes" class="btn-icon" title="刷新文件变更" aria-label="刷新文件变更">↻</button>
+                <button id="close-git-panel" class="btn-icon" title="关闭文件变更" aria-label="关闭文件变更面板">×</button>
+              </div>
+            </div>
+            <div id="git-changes-list" class="git-changes-list">
+              <!-- 文件变更将在这里显示 -->
             </div>
           </div>
         </div>
@@ -181,6 +199,19 @@
             class="artifact-preview-frame"
             sandbox="allow-scripts allow-same-origin"
           ></iframe>
+        </div>
+      </div>
+    </div>
+
+    <!-- Git Diff 预览弹窗 -->
+    <div id="git-diff-modal" class="modal hidden">
+      <div class="modal-content git-diff-modal-content">
+        <div class="modal-header">
+          <h3 class="git-diff-title">文件 <span id="git-diff-path"></span> Diff</h3>
+          <button id="close-git-diff" class="btn-icon" aria-label="关闭 Diff 预览">×</button>
+        </div>
+        <div class="git-diff-body">
+          <pre id="git-diff-content" class="git-diff-content" role="region" aria-label="文件 Diff 内容"></pre>
         </div>
       </div>
     </div>
