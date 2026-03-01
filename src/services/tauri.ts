@@ -81,6 +81,14 @@ export function switchAgentModel(
   });
 }
 
+export function toggleAgentThink(
+  agentId: string,
+  enable: boolean,
+  config: string | null = null,
+): Promise<void> {
+  return invoke('toggle_agent_think', { agentId, enable, config });
+}
+
 export function sendMessage(
   agentId: string,
   content: string,

@@ -8,6 +8,7 @@ export interface Agent {
   workspacePath: string;
   iflowPath?: string;
   selectedModel?: string;
+  thinkEnabled?: boolean;
   port?: number;
 }
 
@@ -72,6 +73,8 @@ export interface ModelOption {
   label: string;
   value: string;
 }
+
+export type ThinkSupportStatus = 'unknown' | 'supported' | 'unsupported';
 
 export interface AgentRegistry {
   commands: RegistryCommand[];

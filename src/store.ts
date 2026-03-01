@@ -6,6 +6,7 @@ import type {
   ToolCall,
   AgentRegistry,
   ModelOption,
+  ThinkSupportStatus,
   SlashMenuItem,
   ThemeMode,
   GitFileChange,
@@ -25,6 +26,7 @@ export const state = {
   registryByAgent: {} as Record<string, AgentRegistry>,
   toolCallsByAgent: {} as Record<string, ToolCall[]>,
   modelOptionsCacheByAgent: {} as Record<string, ModelOption[]>,
+  thinkSupportByModel: {} as Record<string, ThinkSupportStatus>,
   gitChangesByAgent: {} as Record<string, GitFileChange[]>,
   gitChangesLoadingByAgent: {} as Record<string, boolean>,
   gitChangesErrorByAgent: {} as Record<string, string>,
@@ -33,6 +35,7 @@ export const state = {
   // ── UI 交互状态 ────────────────────────────────────────────────────────────
   modelSelectorOpen: false,
   modelSwitchingAgentId: null as string | null,
+  thinkSwitchingAgentId: null as string | null,
   renamingAgentId: null as string | null,
 
   // slash menu

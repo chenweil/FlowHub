@@ -59,6 +59,11 @@ pub(crate) enum ListenerCommand {
         model: String,
         response: oneshot::Sender<Result<String, String>>,
     },
+    SetThink {
+        enable: bool,
+        config: String,
+        response: oneshot::Sender<Result<bool, String>>,
+    },
 }
 
 pub(crate) type MessageSender = UnboundedSender<ListenerCommand>;

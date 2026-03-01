@@ -464,6 +464,14 @@ pub async fn message_listener_task(
                     i64,
                     (tokio::sync::oneshot::Sender<Result<String, String>>, String),
                 > = HashMap::new();
+                let mut pending_set_think_requests: HashMap<
+                    i64,
+                    (
+                        tokio::sync::oneshot::Sender<Result<bool, String>>,
+                        bool,
+                        String,
+                    ),
+                > = HashMap::new();
 
                 let init_id = next_rpc_id(&mut rpc_id_counter);
                 let init_request =
@@ -563,6 +571,36 @@ pub async fn message_listener_task(
                                             break;
                                         }
                                         pending_set_model_requests.insert(switch_id, (response, model));
+                                    } else {
+                                        let _ = response.send(Err("Session not ready".to_string()));
+                                    }
+                                }
+                                Some(ListenerCommand::SetThink {
+                                    enable,
+                                    config,
+                                    response,
+                                }) => {
+                                    if let Some(current_session_id) = &session_id {
+                                        let requested_config = config.clone();
+                                        let switch_id = next_rpc_id(&mut rpc_id_counter);
+                                        let switch_request = build_rpc_request(
+                                            switch_id,
+                                            "session/set_think",
+                                            json!({
+                                                "sessionId": current_session_id,
+                                                "thinkEnabled": enable,
+                                                "thinkConfig": requested_config,
+                                            }),
+                                        );
+                                        if let Err(e) = conn.send_message(switch_request).await {
+                                            let _ = response.send(Err(format!(
+                                                "Failed to send session/set_think: {}",
+                                                e
+                                            )));
+                                            break;
+                                        }
+                                        pending_set_think_requests
+                                            .insert(switch_id, (response, enable, config));
                                     } else {
                                         let _ = response.send(Err("Session not ready".to_string()));
                                     }
@@ -983,6 +1021,42 @@ pub async fn message_listener_task(
                                                 }),
                                             );
                                             let _ = response.send(Ok(current_model));
+                                            continue;
+                                        }
+
+                                        if let Some((response, requested_enable, requested_config)) =
+                                            pending_set_think_requests.remove(&response_id)
+                                        {
+                                            if let Some(error) = message_json.get("error") {
+                                                let _ = response.send(Err(format!(
+                                                    "session/set_think failed: {}",
+                                                    error
+                                                )));
+                                                continue;
+                                            }
+
+                                            let current_enabled = message_json
+                                                .get("result")
+                                                .and_then(|result| result.get("currentThinkEnabled"))
+                                                .and_then(Value::as_bool)
+                                                .unwrap_or(requested_enable);
+                                            let current_config = message_json
+                                                .get("result")
+                                                .and_then(|result| result.get("currentThinkConfig"))
+                                                .and_then(Value::as_str)
+                                                .map(|value| value.trim().to_string())
+                                                .filter(|value| !value.is_empty())
+                                                .unwrap_or(requested_config);
+
+                                            let _ = app_handle.emit(
+                                                "think-status-changed",
+                                                json!({
+                                                    "agentId": &agent_id,
+                                                    "enabled": current_enabled,
+                                                    "config": current_config,
+                                                }),
+                                            );
+                                            let _ = response.send(Ok(current_enabled));
                                             continue;
                                         }
                                     }

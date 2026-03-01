@@ -5,6 +5,7 @@ import {
   listAvailableModels,
   listGitChanges,
   switchAgentModel as tauriSwitchAgentModel,
+  toggleAgentThink as tauriToggleAgentThink,
 } from '../../services/tauri';
 import { shortAgentId, getWorkspaceName } from '../../lib/utils';
 import { escapeHtml } from '../../lib/html';
@@ -15,6 +16,7 @@ import type {
   RegistryCommand,
   RegistryMcpServer,
   ModelOption,
+  ThinkSupportStatus,
   ParsedModelSlashCommand,
   GitFileChange,
 } from '../../types';
@@ -26,6 +28,7 @@ import {
   currentAgentModelBtnEl,
   currentAgentModelTextEl,
   currentAgentModelMenuEl,
+  toggleThinkBtnEl,
   toolCallsPanelEl,
   toolCallsListEl,
   gitChangesPanelEl,
@@ -77,6 +80,62 @@ export function readTextFromUnknown(value: unknown): string {
 export function isCurrentAgentBusy(): boolean {
   const currentAgent = state.currentAgentId ? state.agents.find((agent) => agent.id === state.currentAgentId) : null;
   return Boolean(currentAgent && state.inflightSessionByAgent[currentAgent.id]);
+}
+
+const THINK_UNSUPPORTED_HINTS = [
+  'not support',
+  'not supported',
+  'unsupported',
+  'does not support',
+  'method not found',
+  'unknown method',
+  'not implemented',
+  'unavailable',
+  '不支持',
+  '不可用',
+  '未实现',
+];
+
+function readErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return String(error);
+}
+
+function normalizeThinkModelKey(modelName: string | undefined): string | null {
+  if (typeof modelName !== 'string') {
+    return null;
+  }
+  const normalized = modelName.trim().toLowerCase();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function getThinkSupportByModel(modelName: string | undefined): ThinkSupportStatus {
+  const key = normalizeThinkModelKey(modelName);
+  if (!key) {
+    return 'unknown';
+  }
+  return state.thinkSupportByModel[key] || 'unknown';
+}
+
+function setThinkSupportByModel(modelName: string | undefined, status: ThinkSupportStatus) {
+  const key = normalizeThinkModelKey(modelName);
+  if (!key) {
+    return;
+  }
+  state.thinkSupportByModel[key] = status;
+}
+
+function isThinkUnsupportedError(error: unknown): boolean {
+  const message = readErrorMessage(error).toLowerCase();
+  if (THINK_UNSUPPORTED_HINTS.some((hint) => message.includes(hint))) {
+    return true;
+  }
+
+  const hasThinkContext = message.includes('set_think') || message.includes('think');
+  const hasInvalidParams = message.includes('invalid params') || message.includes('invalid parameters');
+  return hasThinkContext && hasInvalidParams;
 }
 
 // ── Agent registry ────────────────────────────────────────────────────────────
@@ -195,6 +254,7 @@ export function applyAgentModelRegistry(
 
   if (state.currentAgentId === agentId) {
     updateCurrentAgentModelUI();
+    updateCurrentAgentThinkUI();
     if (state.modelSelectorOpen) {
       renderCurrentAgentModelMenu(agent, state.modelOptionsCacheByAgent[agentId] || []);
     }
@@ -450,6 +510,74 @@ export function updateCurrentAgentModelUI() {
   }
 }
 
+export function updateCurrentAgentThinkUI() {
+  const agent = state.currentAgentId ? state.agents.find((item) => item.id === state.currentAgentId) : null;
+  if (!agent) {
+    toggleThinkBtnEl.disabled = true;
+    toggleThinkBtnEl.classList.remove('active', 'loading', 'unsupported');
+    toggleThinkBtnEl.textContent = '思考：关';
+    toggleThinkBtnEl.title = '思考：未连接';
+    return;
+  }
+
+  const supportStatus = getThinkSupportByModel(agent.selectedModel);
+  const unsupported = supportStatus === 'unsupported';
+  const enabled = !unsupported && Boolean(agent.thinkEnabled);
+  const switching = state.thinkSwitchingAgentId === agent.id;
+  toggleThinkBtnEl.classList.toggle('active', enabled);
+  toggleThinkBtnEl.classList.toggle('loading', switching);
+  toggleThinkBtnEl.classList.toggle('unsupported', unsupported);
+  toggleThinkBtnEl.textContent = unsupported ? '思考：不支持' : `思考：${enabled ? '开' : '关'}`;
+  toggleThinkBtnEl.title = switching
+    ? '切换中...'
+    : unsupported
+      ? '当前模型不支持思考模式'
+      : enabled
+        ? '点击关闭思考模式'
+        : '点击开启思考模式';
+  toggleThinkBtnEl.disabled = agent.status !== 'connected' || switching || unsupported;
+}
+
+export async function toggleCurrentAgentThink() {
+  const agent = state.currentAgentId ? state.agents.find((item) => item.id === state.currentAgentId) : null;
+  if (!agent || agent.status !== 'connected') {
+    return;
+  }
+  if (state.thinkSwitchingAgentId === agent.id) {
+    return;
+  }
+  if (getThinkSupportByModel(agent.selectedModel) === 'unsupported') {
+    showError('当前模型不支持思考模式');
+    return;
+  }
+
+  const nextEnabled = !Boolean(agent.thinkEnabled);
+  state.thinkSwitchingAgentId = agent.id;
+  updateCurrentAgentThinkUI();
+
+  try {
+    await tauriToggleAgentThink(agent.id, nextEnabled, 'think');
+    setThinkSupportByModel(agent.selectedModel, 'supported');
+    agent.thinkEnabled = nextEnabled;
+    await saveAgents();
+    showSuccess(`思考模式已${nextEnabled ? '开启' : '关闭'}`);
+  } catch (error) {
+    const errorMessage = readErrorMessage(error);
+    console.error('Think toggle error:', errorMessage);
+    if (isThinkUnsupportedError(error)) {
+      setThinkSupportByModel(agent.selectedModel, 'unsupported');
+      agent.thinkEnabled = false;
+      await saveAgents();
+      showError('当前模型不支持思考模式');
+    } else {
+      showError(`切换思考模式失败: ${errorMessage}`);
+    }
+  } finally {
+    state.thinkSwitchingAgentId = null;
+    updateCurrentAgentThinkUI();
+  }
+}
+
 // ── Agent list UI ─────────────────────────────────────────────────────────────
 
 export function onAgentListClick(event: MouseEvent) {
@@ -538,6 +666,7 @@ export async function addAgent(name: string, iflowPath: string, workspacePath: s
       status: 'connected',
       workspacePath,
       iflowPath,
+      thinkEnabled: false,
       port: result.port,
     };
 
@@ -572,6 +701,7 @@ export function selectAgent(agentId: string) {
   const agent = state.agents.find((a) => a.id === agentId);
   if (!agent) {
     updateCurrentAgentModelUI();
+    updateCurrentAgentThinkUI();
     return;
   }
 
@@ -597,6 +727,7 @@ export function selectAgent(agentId: string) {
 
   renderAgentList();
   updateCurrentAgentModelUI();
+  updateCurrentAgentThinkUI();
   updateConnectionStatus(isConnected);
   const existingToolCalls = state.toolCallsByAgent[agentId] || [];
   if (existingToolCalls.length > 0) {
@@ -800,6 +931,20 @@ export async function reconnectAgent(agentId: string) {
 
     agent.status = 'connected';
     agent.port = result.port;
+    if (agent.thinkEnabled) {
+      try {
+        await tauriToggleAgentThink(agent.id, true, 'think');
+        setThinkSupportByModel(agent.selectedModel, 'supported');
+      } catch (error) {
+        if (isThinkUnsupportedError(error)) {
+          setThinkSupportByModel(agent.selectedModel, 'unsupported');
+          agent.thinkEnabled = false;
+          console.warn('Restore think mode failed: current model does not support think mode');
+        } else {
+          console.error('Restore think mode after reconnect failed:', error);
+        }
+      }
+    }
     await saveAgents();
     selectAgent(agent.id);
     showSuccess('重新连接成功！');
@@ -811,6 +956,7 @@ export async function reconnectAgent(agentId: string) {
 
   renderAgentList();
   updateCurrentAgentModelUI();
+  updateCurrentAgentThinkUI();
   void import('../app').then(({ refreshComposerState }) => {
     refreshComposerState();
   });
@@ -828,6 +974,7 @@ export function updateAgentStatusUI(status: Agent['status']) {
   currentAgentStatusEl.textContent = statusText;
   currentAgentStatusEl.className = `badge${status === 'connected' ? ' connected' : ''}`;
   updateCurrentAgentModelUI();
+  updateCurrentAgentThinkUI();
 }
 
 // 更新连接状态
@@ -1088,6 +1235,7 @@ export function syncAgentModelFromAboutContent(agentId: string, content: string)
   renderAgentList();
   if (state.currentAgentId === agentId) {
     updateCurrentAgentModelUI();
+    updateCurrentAgentThinkUI();
   }
 }
 
@@ -1117,6 +1265,20 @@ export async function switchAgentModel(agent: Agent, modelName: string): Promise
     agent.status = 'connected';
     agent.port = result.port;
     agent.selectedModel = targetModel;
+    if (agent.thinkEnabled) {
+      try {
+        await tauriToggleAgentThink(agent.id, true, 'think');
+        setThinkSupportByModel(agent.selectedModel, 'supported');
+      } catch (error) {
+        if (isThinkUnsupportedError(error)) {
+          setThinkSupportByModel(agent.selectedModel, 'unsupported');
+          agent.thinkEnabled = false;
+          console.warn('Restore think mode after model switch failed: target model does not support think mode');
+        } else {
+          console.error('Restore think mode after model switch failed:', error);
+        }
+      }
+    }
     await saveAgents();
     renderAgentList();
     if (state.currentAgentId === agent.id) {
@@ -1142,6 +1304,7 @@ export async function switchAgentModel(agent: Agent, modelName: string): Promise
     state.modelSwitchingAgentId = null;
     if (state.currentAgentId === agent.id) {
       updateCurrentAgentModelUI();
+      updateCurrentAgentThinkUI();
     }
   }
 }
@@ -1268,6 +1431,7 @@ export async function loadAgents() {
       renderAgentList();
       renderSessionList();
       updateCurrentAgentModelUI();
+      updateCurrentAgentThinkUI();
       return;
     }
 
@@ -1275,6 +1439,7 @@ export async function loadAgents() {
     state.agents = state.agents.map((agent) => ({
       ...agent,
       iflowPath: agent.iflowPath || 'iflow',
+      thinkEnabled: Boolean(agent.thinkEnabled),
       status: 'disconnected' as const,
       port: undefined,
     }));
@@ -1287,6 +1452,7 @@ export async function loadAgents() {
     renderAgentList();
     renderSessionList();
     updateCurrentAgentModelUI();
+    updateCurrentAgentThinkUI();
   } catch (e) {
     console.error('Failed to load agents:', e);
   }

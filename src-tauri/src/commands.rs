@@ -252,6 +252,44 @@ pub async fn switch_agent_model(
     .await
 }
 
+#[tauri::command]
+pub async fn toggle_agent_think(
+    state: State<'_, AppState>,
+    agent_id: String,
+    enable: bool,
+    config: Option<String>,
+) -> Result<(), String> {
+    let (agent_exists, sender) = state.agent_manager.sender_of(&agent_id).await;
+    if !agent_exists {
+        return Err(format!("Agent {} not found", agent_id));
+    }
+
+    let Some(sender) = sender else {
+        return Err("Message sender not available".to_string());
+    };
+
+    let normalized_config = config
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "think".to_string());
+
+    let (tx, rx) = tokio::sync::oneshot::channel::<Result<bool, String>>();
+    sender
+        .send(ListenerCommand::SetThink {
+            enable,
+            config: normalized_config,
+            response: tx,
+        })
+        .map_err(|e| format!("Failed to queue think switch: {}", e))?;
+
+    match timeout(Duration::from_secs(20), rx).await {
+        Ok(Ok(Ok(_))) => Ok(()),
+        Ok(Ok(Err(err))) => Err(err),
+        Ok(Err(_)) => Err("Think switch response channel closed".to_string()),
+        Err(_) => Err("Think switch timeout after 20 seconds".to_string()),
+    }
+}
+
 
 /// 发送消息
 #[tauri::command]

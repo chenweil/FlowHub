@@ -670,6 +670,27 @@ body {
   cursor: not-allowed;
 }
 
+.think-toggle-btn.active {
+  color: #3fb950;
+  border-color: rgba(63, 185, 80, 0.5);
+  background: rgba(63, 185, 80, 0.14);
+}
+
+.think-toggle-btn {
+  min-width: 110px;
+  text-align: center;
+}
+
+.think-toggle-btn.loading {
+  cursor: progress;
+}
+
+.think-toggle-btn.unsupported {
+  color: var(--text-secondary);
+  border-color: var(--border-color);
+  background: var(--bg-tertiary);
+}
+
 .btn-icon {
   width: 32px;
   height: 32px;

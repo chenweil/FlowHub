@@ -22,7 +22,7 @@ mod storage;
 use artifact::{read_html_artifact, resolve_html_artifact_path};
 use commands::{
     connect_iflow, disconnect_agent, send_message, shutdown_all_agents, stop_message,
-    switch_agent_model,
+    switch_agent_model, toggle_agent_think,
 };
 use dialog::pick_folder;
 use git::{list_git_changes, load_git_file_diff};
@@ -42,6 +42,7 @@ fn main() {
             send_message,
             stop_message,
             switch_agent_model,
+            toggle_agent_think,
             list_available_models,
             list_iflow_history_sessions,
             load_iflow_history_messages,

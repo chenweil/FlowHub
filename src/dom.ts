@@ -28,6 +28,7 @@ export const currentAgentStatusEl = document.getElementById('current-agent-statu
 export const currentAgentModelBtnEl = document.getElementById('current-agent-model-btn') as HTMLButtonElement;
 export const currentAgentModelTextEl = document.getElementById('current-agent-model-text') as HTMLSpanElement;
 export const currentAgentModelMenuEl = document.getElementById('current-agent-model-menu') as HTMLDivElement;
+export const toggleThinkBtnEl = document.getElementById('toggle-think-btn') as HTMLButtonElement;
 export const openToolCallsBtnEl = document.getElementById('open-tool-calls-btn') as HTMLButtonElement;
 export const openGitChangesBtnEl = document.getElementById('open-git-changes-btn') as HTMLButtonElement;
 export const toolCallsPanelEl = document.getElementById('tool-calls-panel') as HTMLDivElement;

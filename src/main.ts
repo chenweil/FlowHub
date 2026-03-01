@@ -8,7 +8,7 @@ import {
   setSendButtonMode,
   refreshComposerState,
 } from './features/app';
-import { loadAgents, updateCurrentAgentModelUI } from './features/agents';
+import { loadAgents, updateCurrentAgentModelUI, updateCurrentAgentThinkUI } from './features/agents';
 import { warmUpArtifactPreviewFrame } from './features/ui';
 
 async function init() {
@@ -21,6 +21,7 @@ async function init() {
   warmUpArtifactPreviewFrame();
   setSendButtonMode('send', true);
   updateCurrentAgentModelUI();
+  updateCurrentAgentThinkUI();
   refreshComposerState();
   console.log('App initialized');
 }

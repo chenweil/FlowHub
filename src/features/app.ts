@@ -39,6 +39,7 @@ import {
   renameAgentNameInputEl,
   currentAgentModelBtnEl,
   currentAgentModelMenuEl,
+  toggleThinkBtnEl,
   openToolCallsBtnEl,
   openGitChangesBtnEl,
   toolCallsPanelEl,
@@ -91,6 +92,7 @@ import {
   onCurrentAgentModelMenuClick,
   handleLocalModelCommand,
   syncAgentModelFromAboutContent,
+  toggleCurrentAgentThink,
   refreshAgentGitChanges,
   refreshCurrentAgentGitChanges,
   showGitChangesForAgent,
@@ -610,6 +612,9 @@ export function setupEventListeners() {
     }
     showGitChangesForAgent(state.currentAgentId);
     void refreshCurrentAgentGitChanges();
+  });
+  toggleThinkBtnEl.addEventListener('click', () => {
+    void toggleCurrentAgentThink();
   });
 
   addAgentBtnEl.addEventListener('click', () => {
