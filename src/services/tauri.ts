@@ -108,3 +108,7 @@ export function listGitChanges(workspacePath: string): Promise<GitFileChange[]> 
 export function loadGitFileDiff(workspacePath: string, filePath: string): Promise<string> {
   return invoke<string>('load_git_file_diff', { workspacePath, filePath });
 }
+
+export function pickFolder(defaultPath: string | null): Promise<string | null> {
+  return invoke<string | null>('pick_folder', { defaultPath });
+}

@@ -9,6 +9,7 @@ use tauri::Manager;
 mod agents;
 mod artifact;
 mod commands;
+mod dialog;
 mod git;
 mod history;
 mod manager;
@@ -23,6 +24,7 @@ use commands::{
     connect_iflow, disconnect_agent, send_message, shutdown_all_agents, stop_message,
     switch_agent_model,
 };
+use dialog::pick_folder;
 use git::{list_git_changes, load_git_file_diff};
 use history::{
     clear_iflow_history_sessions, delete_iflow_history_session, list_iflow_history_sessions,
@@ -52,6 +54,7 @@ fn main() {
             disconnect_agent,
             load_storage_snapshot,
             save_storage_snapshot,
+            pick_folder,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

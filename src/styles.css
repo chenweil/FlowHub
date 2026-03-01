@@ -1632,6 +1632,21 @@ body {
   border-color: var(--accent-color);
 }
 
+.workspace-path-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workspace-path-row input {
+  flex: 1;
+}
+
+.btn-compact {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .modal-footer {
   display: flex;
   justify-content: flex-end;

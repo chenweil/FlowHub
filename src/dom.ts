@@ -10,6 +10,8 @@ export const addAgentModalEl = document.getElementById('add-agent-modal') as HTM
 export const closeModalBtnEl = document.getElementById('close-modal') as HTMLButtonElement;
 export const cancelAddAgentBtnEl = document.getElementById('cancel-add-agent') as HTMLButtonElement;
 export const confirmAddAgentBtnEl = document.getElementById('confirm-add-agent') as HTMLButtonElement;
+export const workspacePathInputEl = document.getElementById('workspace-path') as HTMLInputElement;
+export const browseWorkspacePathBtnEl = document.getElementById('browse-workspace-path') as HTMLButtonElement;
 export const renameAgentModalEl = document.getElementById('rename-agent-modal') as HTMLDivElement;
 export const closeRenameAgentModalBtnEl = document.getElementById(
   'close-rename-agent-modal'

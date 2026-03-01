@@ -12,6 +12,7 @@ import {
   getVersion,
   sendMessage as tauriSendMessage,
   stopMessage,
+  pickFolder,
 } from '../services/tauri';
 import { TIMEOUTS } from '../config';
 import { generateAcpSessionId, streamTypeToRole } from '../lib/utils';
@@ -29,6 +30,8 @@ import {
   closeModalBtnEl,
   cancelAddAgentBtnEl,
   confirmAddAgentBtnEl,
+  workspacePathInputEl,
+  browseWorkspacePathBtnEl,
   renameAgentModalEl,
   closeRenameAgentModalBtnEl,
   cancelRenameAgentBtnEl,
@@ -647,17 +650,35 @@ export function setupEventListeners() {
   confirmAddAgentBtnEl.addEventListener('click', async () => {
     const nameInput = document.getElementById('agent-name') as HTMLInputElement;
     const pathInput = document.getElementById('iflow-path') as HTMLInputElement;
-    const workspaceInput = document.getElementById('workspace-path') as HTMLInputElement;
 
     const name = nameInput.value.trim() || 'iFlow';
     const iflowPath = pathInput.value.trim() || 'iflow';
-    const workspacePath = workspaceInput.value.trim();
+    const workspacePath = workspacePathInputEl.value.trim();
 
     hideModal();
     await addAgent(name, iflowPath, workspacePath);
 
     nameInput.value = 'iFlow';
     pathInput.value = '';
+  });
+
+  browseWorkspacePathBtnEl.addEventListener('click', async () => {
+    const originalText = browseWorkspacePathBtnEl.textContent;
+    browseWorkspacePathBtnEl.disabled = true;
+    browseWorkspacePathBtnEl.textContent = '选择中...';
+
+    try {
+      const selectedPath = await pickFolder(workspacePathInputEl.value.trim() || null);
+      if (selectedPath) {
+        workspacePathInputEl.value = selectedPath;
+      }
+    } catch (error) {
+      console.error('Pick workspace folder failed:', error);
+      showError(`选择文件夹失败: ${String(error)}`);
+    } finally {
+      browseWorkspacePathBtnEl.disabled = false;
+      browseWorkspacePathBtnEl.textContent = originalText;
+    }
   });
 
   closeRenameAgentModalBtnEl.addEventListener('click', hideRenameAgentModal);
