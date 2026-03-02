@@ -46,7 +46,9 @@ fn workspace_to_iflow_project_key(workspace_path: &str) -> String {
 }
 
 fn iflow_projects_root() -> Result<PathBuf, String> {
-    let home_dir = env::var("HOME").map_err(|e| format!("HOME is not set: {}", e))?;
+    let home_dir = env::var("HOME")
+        .or_else(|_| env::var("USERPROFILE"))
+        .map_err(|e| format!("HOME/USERPROFILE is not set: {}", e))?;
     Ok(PathBuf::from(home_dir).join(".iflow").join("projects"))
 }
 
