@@ -113,19 +113,13 @@ async function cleanupProjectBinary() {
       }
     }
 
-    // 备用: 使用 tasklist
+    // 备用: 仅检测同名进程，不直接按进程名清理，避免误杀其他项目实例
     if (pids.length === 0) {
       const { stdout: tasklistOut } = await execAsync(
         `tasklist /FI "IMAGENAME eq iflow-workspace.exe" /FO CSV 2>nul`
       );
       if (tasklistOut && !tasklistOut.includes('INFO: No tasks')) {
-        const lines = tasklistOut.split('\n').slice(1);
-        for (const line of lines) {
-          const match = line.match(/"iflow-workspace\.exe","(\d+)"/i);
-          if (match) {
-            pids.push(match[1]);
-          }
-        }
+        console.log('    检测到 iflow-workspace.exe 同名进程，但无法确认路径，已跳过清理以避免误杀');
       }
     }
   } else {
