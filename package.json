@@ -12,7 +12,7 @@
     "tauri:build": "tauri build",
     "kill": "npm run clean",
     "dev:clean": "npm run tauri:dev",
-    "clean": "./scripts/clean-dev.sh"
+    "clean": "node scripts/clean-dev.js"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
