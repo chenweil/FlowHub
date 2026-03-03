@@ -54,6 +54,7 @@ export const state = {
 
   // theme
   currentTheme: ((localStorage.getItem('iflow-theme') as ThemeMode) || 'system') as ThemeMode,
+  notificationSoundId: localStorage.getItem('iflow-notification-sound') || 'bell-happy.wav',
 };
 
 export function canUseConversationQuickAction(): boolean {

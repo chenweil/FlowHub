@@ -528,6 +528,26 @@ body {
   justify-content: flex-end;
 }
 
+.notification-sound-select {
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  min-width: 120px;
+  max-width: 170px;
+  cursor: pointer;
+}
+
+.notification-sound-select:hover,
+.notification-sound-select:focus {
+  border-color: var(--accent-color);
+  color: var(--text-primary);
+  outline: none;
+}
+
 .model-selector {
   position: relative;
 }

@@ -58,6 +58,7 @@ import {
   gitDiffModalEl,
   closeGitDiffBtnEl,
   themeToggleBtnEl,
+  notificationSoundSelectEl,
   appVersionEl,
 } from '../dom';
 import {
@@ -137,6 +138,49 @@ const THEME_STORAGE_KEY = 'iflow-theme';
 const THEME_CYCLE: Record<ThemeMode, ThemeMode> = { system: 'light', light: 'dark', dark: 'system' };
 const THEME_ICON: Record<ThemeMode, string> = { system: '◑', light: '☀', dark: '☾' };
 const THEME_TITLE: Record<ThemeMode, string> = { system: '跟随系统', light: '亮色模式', dark: '暗色模式' };
+const NOTIFICATION_SOUND_STORAGE_KEY = 'iflow-notification-sound';
+const NOTIFICATION_SOUND_NONE = 'none';
+const NOTIFICATION_SOUND_DEFAULT = 'bell-happy.wav';
+const NOTIFICATION_SOUND_OPTIONS: ReadonlyArray<{ id: string; label: string; src: string | null }> = [
+  { id: NOTIFICATION_SOUND_NONE, label: '铃声：关闭', src: null },
+  {
+    id: 'bell-happy.wav',
+    label: '铃声：Happy Bell',
+    src: '/audio/bell/bell-happy.wav',
+  },
+  {
+    id: 'chime-quick.wav',
+    label: '铃声：Quick Chime',
+    src: '/audio/bell/chime-quick.wav',
+  },
+  {
+    id: 'ding-airport.wav',
+    label: '铃声：Airport Ding',
+    src: '/audio/bell/ding-airport.wav',
+  },
+  {
+    id: 'bell-cartoon.wav',
+    label: '铃声：Cartoon Bell',
+    src: '/audio/bell/bell-cartoon.wav',
+  },
+  {
+    id: 'alert-flute.wav',
+    label: '铃声：Flute Alert',
+    src: '/audio/bell/alert-flute.wav',
+  },
+  {
+    id: 'tone-soft.wav',
+    label: '铃声：Soft Interface',
+    src: '/audio/bell/tone-soft.wav',
+  },
+  {
+    id: 'beep-up.wav',
+    label: '铃声：Upward Beep',
+    src: '/audio/bell/beep-up.wav',
+  },
+];
+const notificationAudioEl = new Audio();
+notificationAudioEl.preload = 'auto';
 
 
 export function applyTheme(mode: ThemeMode) {
@@ -145,6 +189,51 @@ export function applyTheme(mode: ThemeMode) {
   if (mode !== 'system') root.classList.add(`theme-${mode}`);
   themeToggleBtnEl.textContent = THEME_ICON[mode];
   themeToggleBtnEl.title = THEME_TITLE[mode];
+}
+
+function normalizeNotificationSoundId(soundId: string | null | undefined): string {
+  if (!soundId) {
+    return NOTIFICATION_SOUND_DEFAULT;
+  }
+  const matched = NOTIFICATION_SOUND_OPTIONS.find((item) => item.id === soundId);
+  return matched ? matched.id : NOTIFICATION_SOUND_DEFAULT;
+}
+
+function notificationSoundSrcById(soundId: string): string | null {
+  const matched = NOTIFICATION_SOUND_OPTIONS.find((item) => item.id === soundId);
+  return matched?.src || null;
+}
+
+function applyNotificationSoundSelection(soundId: string) {
+  const normalized = normalizeNotificationSoundId(soundId);
+  state.notificationSoundId = normalized;
+  localStorage.setItem(NOTIFICATION_SOUND_STORAGE_KEY, normalized);
+  notificationSoundSelectEl.value = normalized;
+}
+
+export function setupNotificationSoundSelector() {
+  notificationSoundSelectEl.innerHTML = NOTIFICATION_SOUND_OPTIONS.map((item) => {
+    return `<option value="${item.id}">${item.label}</option>`;
+  }).join('');
+
+  const saved = normalizeNotificationSoundId(state.notificationSoundId);
+  applyNotificationSoundSelection(saved);
+}
+
+export async function playTaskFinishSound() {
+  const source = notificationSoundSrcById(state.notificationSoundId);
+  if (!source) {
+    return;
+  }
+
+  try {
+    notificationAudioEl.pause();
+    notificationAudioEl.currentTime = 0;
+    notificationAudioEl.src = source;
+    await notificationAudioEl.play();
+  } catch (error) {
+    console.warn('Play task finish sound failed:', error);
+  }
 }
 
 
@@ -298,6 +387,8 @@ export function setupTauriEventListeners() {
       renderSessionList();
       refreshComposerState();
     }
+
+    void playTaskFinishSound();
   });
 
   onAgentError((payload) => {
@@ -592,11 +683,16 @@ export function handleSlashMenuKeydown(event: KeyboardEvent): boolean {
 // 设置事件监听
 export function setupEventListeners() {
   console.log('Setting up event listeners...');
+  setupNotificationSoundSelector();
 
   themeToggleBtnEl.addEventListener('click', () => {
     state.currentTheme = THEME_CYCLE[state.currentTheme];
     applyTheme(state.currentTheme);
     localStorage.setItem(THEME_STORAGE_KEY, state.currentTheme);
+  });
+  notificationSoundSelectEl.addEventListener('change', () => {
+    applyNotificationSoundSelection(notificationSoundSelectEl.value);
+    void playTaskFinishSound();
   });
   openToolCallsBtnEl.addEventListener('click', () => {
     if (!state.currentAgentId) {

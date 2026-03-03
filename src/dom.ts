@@ -54,4 +54,5 @@ export const closeGitDiffBtnEl = document.getElementById('close-git-diff') as HT
 export const gitDiffPathEl = document.getElementById('git-diff-path') as HTMLSpanElement;
 export const gitDiffContentEl = document.getElementById('git-diff-content') as HTMLPreElement;
 export const themeToggleBtnEl = document.getElementById('theme-toggle-btn') as HTMLButtonElement;
+export const notificationSoundSelectEl = document.getElementById('notification-sound-select') as HTMLSelectElement;
 export const appVersionEl = document.getElementById('app-version') as HTMLDivElement;
