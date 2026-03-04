@@ -1,35 +1,12 @@
 //! iFlow 可执行文件路径解析与模型列表提取
-use std::env;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::models::ModelOption;
+use crate::runtime_env::resolve_executable_path;
 
 fn resolve_iflow_executable_path(iflow_path: &str) -> Result<PathBuf, String> {
-    let trimmed = iflow_path.trim();
-    if trimmed.is_empty() {
-        return Err("iflow path cannot be empty".to_string());
-    }
-
-    let input_path = PathBuf::from(trimmed);
-    if input_path.is_absolute() || trimmed.contains(std::path::MAIN_SEPARATOR) {
-        if input_path.exists() {
-            let resolved = std::fs::canonicalize(&input_path).unwrap_or(input_path);
-            return Ok(resolved);
-        }
-        return Err(format!("iflow executable not found: {}", trimmed));
-    }
-
-    let path_var =
-        env::var_os("PATH").ok_or_else(|| "PATH environment variable not found".to_string())?;
-    for search_path in env::split_paths(&path_var) {
-        let candidate = search_path.join(trimmed);
-        if candidate.is_file() {
-            let resolved = std::fs::canonicalize(&candidate).unwrap_or(candidate);
-            return Ok(resolved);
-        }
-    }
-
-    Err(format!("iflow executable not found in PATH: {}", trimmed))
+    resolve_executable_path(iflow_path)
 }
 
 fn resolve_iflow_bundle_entry(iflow_path: &str) -> Result<PathBuf, String> {
@@ -120,34 +97,173 @@ fn extract_bracket_block(source: &str, anchor: &str) -> Option<String> {
     None
 }
 
-fn parse_model_entries_from_array_block(block: &str) -> Vec<ModelOption> {
-    let mut options = Vec::new();
-    let mut cursor = 0_usize;
-    const LABEL_PREFIX: &str = "{label:\"";
-    const VALUE_SEPARATOR: &str = "\",value:\"";
+fn skip_ascii_whitespace(bytes: &[u8], mut index: usize) -> usize {
+    while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+        index += 1;
+    }
+    index
+}
 
-    while let Some(start_rel) = block[cursor..].find(LABEL_PREFIX) {
-        let label_start = cursor + start_rel + LABEL_PREFIX.len();
-        let Some(value_sep_rel) = block[label_start..].find(VALUE_SEPARATOR) else {
-            break;
-        };
-        let label_end = label_start + value_sep_rel;
-        let value_start = label_end + VALUE_SEPARATOR.len();
-        let Some(value_end_rel) = block[value_start..].find('"') else {
-            break;
-        };
-        let value_end = value_start + value_end_rel;
+fn unescape_js_string(raw: &str) -> String {
+    let mut output = String::with_capacity(raw.len());
+    let mut chars = raw.chars();
 
-        let label = block[label_start..label_end].replace("\\\"", "\"");
-        let value = block[value_start..value_end].replace("\\\"", "\"");
-        if !value.trim().is_empty() {
-            options.push(ModelOption { label, value });
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            output.push(ch);
+            continue;
         }
 
-        cursor = value_end + 1;
+        match chars.next() {
+            Some('"') => output.push('"'),
+            Some('\'') => output.push('\''),
+            Some('\\') => output.push('\\'),
+            Some('n') => output.push('\n'),
+            Some('r') => output.push('\r'),
+            Some('t') => output.push('\t'),
+            Some(other) => output.push(other),
+            None => break,
+        }
     }
 
-    options
+    output
+}
+
+fn parse_quoted_js_string(source: &str, index: usize) -> Option<(String, usize)> {
+    let bytes = source.as_bytes();
+    if index >= bytes.len() {
+        return None;
+    }
+
+    let quote = bytes[index];
+    if quote != b'"' && quote != b'\'' {
+        return None;
+    }
+
+    let mut cursor = index + 1;
+    let start = cursor;
+    let mut escaped = false;
+
+    while cursor < bytes.len() {
+        let current = bytes[cursor];
+        if escaped {
+            escaped = false;
+            cursor += 1;
+            continue;
+        }
+
+        if current == b'\\' {
+            escaped = true;
+            cursor += 1;
+            continue;
+        }
+
+        if current == quote {
+            let raw = &source[start..cursor];
+            return Some((unescape_js_string(raw), cursor + 1));
+        }
+
+        cursor += 1;
+    }
+
+    None
+}
+
+fn parse_keyed_js_string(source: &str, index: usize, key: &str) -> Option<(String, usize)> {
+    let bytes = source.as_bytes();
+    let mut cursor = skip_ascii_whitespace(bytes, index);
+    if !source[cursor..].starts_with(key) {
+        return None;
+    }
+
+    cursor += key.len();
+    cursor = skip_ascii_whitespace(bytes, cursor);
+    if cursor >= bytes.len() || bytes[cursor] != b':' {
+        return None;
+    }
+
+    cursor += 1;
+    cursor = skip_ascii_whitespace(bytes, cursor);
+    parse_quoted_js_string(source, cursor)
+}
+
+fn is_likely_model_value(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.chars().any(|ch| ch.is_ascii_whitespace()) {
+        return false;
+    }
+
+    trimmed.chars().all(|ch| {
+        ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '/' | ':' | '+')
+    })
+}
+
+fn dedupe_model_options(options: Vec<ModelOption>) -> Vec<ModelOption> {
+    let mut deduped = Vec::new();
+    let mut seen = HashSet::new();
+
+    for option in options {
+        let value = option.value.trim();
+        if value.is_empty() {
+            continue;
+        }
+
+        let key = value.to_ascii_lowercase();
+        if seen.insert(key) {
+            deduped.push(option);
+        }
+    }
+
+    deduped
+}
+
+fn parse_model_entries_from_text(source: &str) -> Vec<ModelOption> {
+    let bytes = source.as_bytes();
+    let mut options = Vec::new();
+    let mut cursor = 0_usize;
+
+    while let Some(rel) = source[cursor..].find("label") {
+        let start = cursor + rel;
+        if let Some((label, after_label)) = parse_keyed_js_string(source, start, "label") {
+            let mut next = skip_ascii_whitespace(bytes, after_label);
+            if next < bytes.len() && bytes[next] == b',' {
+                next += 1;
+            }
+            if let Some((value, after_value)) = parse_keyed_js_string(source, next, "value") {
+                if is_likely_model_value(&value) {
+                    options.push(ModelOption { label, value });
+                }
+                cursor = after_value;
+                continue;
+            }
+        }
+        cursor = start + "label".len();
+    }
+
+    cursor = 0;
+    while let Some(rel) = source[cursor..].find("value") {
+        let start = cursor + rel;
+        if let Some((value, after_value)) = parse_keyed_js_string(source, start, "value") {
+            let mut next = skip_ascii_whitespace(bytes, after_value);
+            if next < bytes.len() && bytes[next] == b',' {
+                next += 1;
+            }
+            if let Some((label, after_label)) = parse_keyed_js_string(source, next, "label") {
+                if is_likely_model_value(&value) {
+                    options.push(ModelOption { label, value });
+                }
+                cursor = after_label;
+                continue;
+            }
+        }
+        cursor = start + "value".len();
+    }
+
+    dedupe_model_options(options)
+}
+
+fn parse_model_entries_from_array_block(block: &str) -> Vec<ModelOption> {
+    parse_model_entries_from_text(block)
 }
 
 fn extract_model_options_from_bundle(entry_path: &Path) -> Result<Vec<ModelOption>, String> {
@@ -168,8 +284,18 @@ fn extract_model_options_from_bundle(entry_path: &Path) -> Result<Vec<ModelOptio
         }
     }
 
-    let block = block.ok_or_else(|| "Failed to locate model list in iflow bundle".to_string())?;
-    let models = parse_model_entries_from_array_block(&block);
+    let models = if let Some(block) = block {
+        parse_model_entries_from_array_block(&block)
+    } else {
+        Vec::new()
+    };
+
+    let models = if models.is_empty() {
+        parse_model_entries_from_text(&bundle_text)
+    } else {
+        models
+    };
+
     if models.is_empty() {
         return Err("No model entries found in iflow bundle".to_string());
     }
@@ -189,6 +315,7 @@ mod tests {
 
     use super::{
         build_bundle_entry_candidates, extract_bracket_block, parse_model_entries_from_array_block,
+        parse_model_entries_from_text,
     };
 
     #[test]
@@ -208,6 +335,17 @@ mod tests {
         assert_eq!(entries[0].value, "glm-4.7");
         assert_eq!(entries[1].label, "Kimi-K2.5");
         assert_eq!(entries[1].value, "kimi-k2.5");
+    }
+
+    #[test]
+    fn parse_model_entries_from_text_without_anchor() {
+        let source = r#"abc { label : "GLM-5" , value : "glm-5" } xyz {value:'deepseek-v3.2-chat', label:'DeepSeek-V3.2'}"#;
+        let entries = parse_model_entries_from_text(source);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].label, "GLM-5");
+        assert_eq!(entries[0].value, "glm-5");
+        assert_eq!(entries[1].label, "DeepSeek-V3.2");
+        assert_eq!(entries[1].value, "deepseek-v3.2-chat");
     }
 
     #[test]

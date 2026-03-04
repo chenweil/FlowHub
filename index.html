@@ -64,13 +64,7 @@
             </div>
           </div>
           <div class="toolbar-actions">
-            <select
-              id="notification-sound-select"
-              class="notification-sound-select"
-              aria-label="对话完成提示音"
-              title="对话完成提示音"
-            ></select>
-            <button id="theme-toggle-btn" class="btn-icon" title="跟随系统" aria-label="切换主题">◑</button>
+            <button id="open-settings-btn" class="btn-secondary" type="button" aria-label="打开设置">设置</button>
             <button id="toggle-think-btn" class="btn-secondary think-toggle-btn" aria-label="切换思考模式" disabled>思考：关</button>
             <button id="open-tool-calls-btn" class="btn-secondary" aria-label="打开工具调用面板">工具调用</button>
             <button id="open-git-changes-btn" class="btn-secondary" aria-label="打开文件变更面板">文件变更</button>
@@ -189,6 +183,94 @@
         <div class="modal-footer">
           <button id="cancel-rename-agent" class="btn-secondary">取消</button>
           <button id="confirm-rename-agent" class="btn-primary">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 设置弹窗 -->
+    <div id="settings-modal" class="modal hidden">
+      <div class="modal-content settings-modal-content">
+        <div class="modal-header">
+          <h3>设置</h3>
+          <button id="close-settings-modal" class="btn-icon" aria-label="关闭设置">×</button>
+        </div>
+        <div class="modal-body settings-modal-body">
+          <div class="settings-group">
+            <div class="settings-group-title">刷新后重连</div>
+            <div class="auto-reconnect-control">
+              <span class="auto-reconnect-label">重连方式</span>
+              <select
+                id="auto-reconnect-mode-select"
+                class="auto-reconnect-select"
+                aria-label="自动重连模式"
+                title="刷新后重连方式"
+              >
+                <option value="last">最后一个</option>
+                <option value="all">全部</option>
+                <option value="off">关闭</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="settings-group">
+            <div class="settings-group-title">提醒</div>
+            <div class="notification-controls settings-notification-controls">
+              <div class="notification-delay-group" aria-label="提醒延迟">
+                <span class="notification-delay-label">延迟</span>
+                <input
+                  id="notification-delay-minute"
+                  class="notification-delay-input"
+                  type="number"
+                  min="0"
+                  max="59"
+                  step="1"
+                  inputmode="numeric"
+                  title="提醒延迟分钟"
+                  aria-label="提醒延迟分钟"
+                />
+                <span class="notification-delay-unit">分</span>
+                <input
+                  id="notification-delay-second"
+                  class="notification-delay-input"
+                  type="number"
+                  min="0"
+                  max="59"
+                  step="1"
+                  inputmode="numeric"
+                  title="提醒延迟秒"
+                  aria-label="提醒延迟秒"
+                />
+                <span class="notification-delay-unit">秒</span>
+              </div>
+              <select
+                id="notification-sound-select"
+                class="notification-sound-select"
+                aria-label="对话完成提示音"
+                title="对话完成提示音"
+              ></select>
+              <button
+                id="notification-sound-upload-btn"
+                class="btn-secondary btn-compact notification-upload-btn"
+                type="button"
+              >
+                上传铃声
+              </button>
+              <input
+                id="notification-sound-upload-input"
+                type="file"
+                accept="audio/*"
+                class="hidden-file-input"
+              />
+            </div>
+          </div>
+
+          <div class="settings-group">
+            <div class="settings-group-title">外观</div>
+            <button id="theme-toggle-btn" class="btn-secondary settings-theme-btn" title="跟随系统" aria-label="切换主题">主题：◑</button>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="close-settings-footer-btn" class="btn-primary">完成</button>
         </div>
       </div>
     </div>

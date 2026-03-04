@@ -648,11 +648,16 @@ export function showGitChanges(
     error?: string;
     lastRefreshedAt?: number;
     disableRefresh?: boolean;
+    forceOpen?: boolean;
   }
 ) {
   const loading = Boolean(options?.loading);
   const error = options?.error?.trim() || '';
   const disableRefresh = Boolean(options?.disableRefresh);
+  const forceOpen = Boolean(options?.forceOpen);
+  if (!forceOpen && gitChangesPanelEl.classList.contains('hidden')) {
+    return;
+  }
 
   refreshGitChangesBtnEl.disabled = loading || disableRefresh;
   gitChangesRefreshTimeEl.textContent = formatGitRefreshTime(options?.lastRefreshedAt);

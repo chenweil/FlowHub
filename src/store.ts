@@ -12,6 +12,19 @@ import type {
   GitFileChange,
 } from './types';
 
+const NOTIFICATION_DELAY_STORAGE_KEY = 'iflow-notification-delay-ms';
+const NOTIFICATION_DEFAULT_DELAY_MS = 5000;
+const NOTIFICATION_MAX_DELAY_MS = 59 * 60 * 1000 + 59 * 1000;
+
+function normalizeNotificationDelayMs(rawValue: string | null): number {
+  const parsed = Number.parseInt(rawValue || '', 10);
+  if (!Number.isFinite(parsed)) {
+    return NOTIFICATION_DEFAULT_DELAY_MS;
+  }
+  const normalized = Math.max(0, Math.min(NOTIFICATION_MAX_DELAY_MS, parsed));
+  return normalized;
+}
+
 export const state = {
   // ── 核心实体 ──────────────────────────────────────────────────────────────
   agents: [] as Agent[],
@@ -55,6 +68,9 @@ export const state = {
   // theme
   currentTheme: ((localStorage.getItem('iflow-theme') as ThemeMode) || 'system') as ThemeMode,
   notificationSoundId: localStorage.getItem('iflow-notification-sound') || 'bell-happy.wav',
+  notificationDelayMs: normalizeNotificationDelayMs(localStorage.getItem(NOTIFICATION_DELAY_STORAGE_KEY)),
+  notificationCustomSoundDataUrl: localStorage.getItem('iflow-notification-custom-sound'),
+  notificationCustomSoundName: localStorage.getItem('iflow-notification-custom-sound-name'),
 };
 
 export function canUseConversationQuickAction(): boolean {

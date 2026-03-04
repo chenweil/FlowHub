@@ -6,6 +6,7 @@ use tokio::time::{timeout, Duration};
 
 use crate::agents::iflow_adapter::{find_available_port, message_listener_task};
 use crate::models::{AgentInfo, AgentStatus, ConnectResponse, ListenerCommand};
+use crate::runtime_env::{resolve_executable_path, runtime_path_env};
 use crate::state::{AgentInstance, AppState};
 
 async fn terminate_agent_process(process: &mut Child) {
@@ -73,12 +74,17 @@ async fn spawn_iflow_agent(
     let port = find_available_port().await?;
     println!("Using port: {}", port);
 
+    let resolved_iflow_path = resolve_executable_path(&iflow_path)?;
+    let runtime_path = runtime_path_env()?;
+    println!("Resolved iFlow executable: {}", resolved_iflow_path.display());
+
     // 启动 iFlow 进程
-    let mut cmd = Command::new(&iflow_path);
+    let mut cmd = Command::new(&resolved_iflow_path);
     cmd.current_dir(&workspace_path)
         .arg("--experimental-acp")
         .arg("--port")
         .arg(port.to_string())
+        .env("PATH", runtime_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);

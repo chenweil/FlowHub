@@ -53,6 +53,29 @@ export const gitDiffModalEl = document.getElementById('git-diff-modal') as HTMLD
 export const closeGitDiffBtnEl = document.getElementById('close-git-diff') as HTMLButtonElement;
 export const gitDiffPathEl = document.getElementById('git-diff-path') as HTMLSpanElement;
 export const gitDiffContentEl = document.getElementById('git-diff-content') as HTMLPreElement;
+export const openSettingsBtnEl = document.getElementById('open-settings-btn') as HTMLButtonElement;
+export const settingsModalEl = document.getElementById('settings-modal') as HTMLDivElement;
+export const closeSettingsModalBtnEl = document.getElementById(
+  'close-settings-modal'
+) as HTMLButtonElement;
+export const closeSettingsFooterBtnEl = document.getElementById(
+  'close-settings-footer-btn'
+) as HTMLButtonElement;
 export const themeToggleBtnEl = document.getElementById('theme-toggle-btn') as HTMLButtonElement;
+export const autoReconnectModeSelectEl = document.getElementById(
+  'auto-reconnect-mode-select'
+) as HTMLSelectElement;
 export const notificationSoundSelectEl = document.getElementById('notification-sound-select') as HTMLSelectElement;
+export const notificationDelayMinuteInputEl = document.getElementById(
+  'notification-delay-minute'
+) as HTMLInputElement;
+export const notificationDelaySecondInputEl = document.getElementById(
+  'notification-delay-second'
+) as HTMLInputElement;
+export const notificationSoundUploadBtnEl = document.getElementById(
+  'notification-sound-upload-btn'
+) as HTMLButtonElement;
+export const notificationSoundUploadInputEl = document.getElementById(
+  'notification-sound-upload-input'
+) as HTMLInputElement;
 export const appVersionEl = document.getElementById('app-version') as HTMLDivElement;

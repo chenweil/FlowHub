@@ -57,8 +57,17 @@ import {
   closeArtifactPreviewBtnEl,
   gitDiffModalEl,
   closeGitDiffBtnEl,
+  openSettingsBtnEl,
+  settingsModalEl,
+  closeSettingsModalBtnEl,
+  closeSettingsFooterBtnEl,
   themeToggleBtnEl,
+  autoReconnectModeSelectEl,
   notificationSoundSelectEl,
+  notificationDelayMinuteInputEl,
+  notificationDelaySecondInputEl,
+  notificationSoundUploadBtnEl,
+  notificationSoundUploadInputEl,
   appVersionEl,
 } from '../dom';
 import {
@@ -92,6 +101,10 @@ import {
   toggleCurrentAgentModelMenu,
   onCurrentAgentModelMenuClick,
   handleLocalModelCommand,
+  handleLocalAgentCommand,
+  type AutoReconnectMode,
+  getAutoReconnectMode,
+  setAutoReconnectMode,
   syncAgentModelFromAboutContent,
   toggleCurrentAgentThink,
   refreshAgentGitChanges,
@@ -125,12 +138,16 @@ const DEFAULT_SLASH_COMMANDS: ReadonlyArray<{ command: string; description: stri
   { command: '/model list', description: '查看可选模型列表' },
   { command: '/model current', description: '查看当前模型（客户端记录）' },
   { command: '/model <name|编号>', description: '切换当前 Agent 模型（本地实现）' },
+  { command: '/directory show', description: '查看当前会话可见目录' },
+  { command: '/directory add <path>', description: '添加额外目录到会话上下文' },
   { command: '/commands', description: '列出可用命令' },
   { command: '/tools', description: '查看工具列表' },
   { command: '/memory show', description: '查看当前记忆' },
   { command: '/stats', description: '查看会话统计' },
   { command: '/mcp list', description: '查看 MCP 列表' },
   { command: '/agents list', description: '查看可用 Agent' },
+  { command: '/agents autoreconnect', description: '查看自动重连模式（last/all/off）' },
+  { command: '/agents autoreconnect <last|all|off>', description: '设置自动重连模式' },
 ];
 // 初始化
 // 主题管理
@@ -139,68 +156,160 @@ const THEME_CYCLE: Record<ThemeMode, ThemeMode> = { system: 'light', light: 'dar
 const THEME_ICON: Record<ThemeMode, string> = { system: '◑', light: '☀', dark: '☾' };
 const THEME_TITLE: Record<ThemeMode, string> = { system: '跟随系统', light: '亮色模式', dark: '暗色模式' };
 const NOTIFICATION_SOUND_STORAGE_KEY = 'iflow-notification-sound';
+const NOTIFICATION_CUSTOM_SOUND_STORAGE_KEY = 'iflow-notification-custom-sound';
+const NOTIFICATION_CUSTOM_SOUND_NAME_STORAGE_KEY = 'iflow-notification-custom-sound-name';
+const NOTIFICATION_DELAY_STORAGE_KEY = 'iflow-notification-delay-ms';
+const AUTO_RECONNECT_MODE_DEFAULT: AutoReconnectMode = 'last';
 const NOTIFICATION_SOUND_NONE = 'none';
-const NOTIFICATION_SOUND_DEFAULT = 'bell-happy.wav';
-const NOTIFICATION_SOUND_OPTIONS: ReadonlyArray<{ id: string; label: string; src: string | null }> = [
-  { id: NOTIFICATION_SOUND_NONE, label: '铃声：关闭', src: null },
+const NOTIFICATION_SOUND_CUSTOM = 'custom-upload';
+const NOTIFICATION_SOUND_DEFAULT = 'short-01.mp3';
+const NOTIFICATION_DEFAULT_DELAY_MS = 5000;
+const NOTIFICATION_MAX_DELAY_MS = 59 * 60 * 1000 + 59 * 1000;
+const NOTIFICATION_MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+
+interface NotificationSoundOption {
+  id: string;
+  label: string;
+  src: string | null;
+}
+
+const NOTIFICATION_BUILTIN_SOUND_OPTIONS: ReadonlyArray<NotificationSoundOption> = [
+  { id: NOTIFICATION_SOUND_NONE, label: '关闭', src: null },
   {
-    id: 'bell-happy.wav',
-    label: '铃声：Happy Bell',
-    src: '/audio/bell/bell-happy.wav',
+    id: 'short-01.mp3',
+    label: '铃声01',
+    src: '/audio/bell/short-01.mp3',
   },
   {
-    id: 'chime-quick.wav',
-    label: '铃声：Quick Chime',
-    src: '/audio/bell/chime-quick.wav',
+    id: 'short-02.wav',
+    label: '铃声02',
+    src: '/audio/bell/short-02.wav',
   },
   {
-    id: 'ding-airport.wav',
-    label: '铃声：Airport Ding',
-    src: '/audio/bell/ding-airport.wav',
+    id: 'short-03.mp3',
+    label: '铃声03',
+    src: '/audio/bell/short-03.mp3',
   },
   {
-    id: 'bell-cartoon.wav',
-    label: '铃声：Cartoon Bell',
-    src: '/audio/bell/bell-cartoon.wav',
+    id: 'short-04.mp3',
+    label: '铃声04',
+    src: '/audio/bell/short-04.mp3',
   },
   {
-    id: 'alert-flute.wav',
-    label: '铃声：Flute Alert',
-    src: '/audio/bell/alert-flute.wav',
+    id: 'short-05.mp3',
+    label: '铃声05',
+    src: '/audio/bell/short-05.mp3',
   },
   {
-    id: 'tone-soft.wav',
-    label: '铃声：Soft Interface',
-    src: '/audio/bell/tone-soft.wav',
+    id: 'short-06.wav',
+    label: '铃声06',
+    src: '/audio/bell/short-06.wav',
   },
   {
-    id: 'beep-up.wav',
-    label: '铃声：Upward Beep',
-    src: '/audio/bell/beep-up.wav',
+    id: 'short-07.mp3',
+    label: '铃声07',
+    src: '/audio/bell/short-07.mp3',
+  },
+  {
+    id: 'short-08.mp3',
+    label: '铃声08',
+    src: '/audio/bell/short-08.mp3',
   },
 ];
 const notificationAudioEl = new Audio();
 notificationAudioEl.preload = 'auto';
+let notificationSoundTimerId: number | null = null;
+
+const AUTO_RECONNECT_MODE_LABELS: Record<AutoReconnectMode, string> = {
+  last: '最后一个',
+  all: '全部',
+  off: '关闭',
+};
+
+function normalizeAutoReconnectMode(rawValue: string | null | undefined): AutoReconnectMode {
+  const normalized = String(rawValue || '').trim().toLowerCase();
+  if (normalized === 'last' || normalized === 'all' || normalized === 'off') {
+    return normalized;
+  }
+  return AUTO_RECONNECT_MODE_DEFAULT;
+}
+
+function setupAutoReconnectModeSelector() {
+  const mode = getAutoReconnectMode();
+  autoReconnectModeSelectEl.value = mode;
+  autoReconnectModeSelectEl.title = `刷新后重连：${AUTO_RECONNECT_MODE_LABELS[mode]}`;
+}
+
+function onAutoReconnectModeChange() {
+  const mode = normalizeAutoReconnectMode(autoReconnectModeSelectEl.value);
+  setAutoReconnectMode(mode);
+  autoReconnectModeSelectEl.value = mode;
+  autoReconnectModeSelectEl.title = `刷新后重连：${AUTO_RECONNECT_MODE_LABELS[mode]}`;
+}
 
 
 export function applyTheme(mode: ThemeMode) {
   const root = document.documentElement;
   root.classList.remove('theme-light', 'theme-dark');
   if (mode !== 'system') root.classList.add(`theme-${mode}`);
-  themeToggleBtnEl.textContent = THEME_ICON[mode];
+  themeToggleBtnEl.textContent = `主题：${THEME_ICON[mode]}`;
   themeToggleBtnEl.title = THEME_TITLE[mode];
+}
+
+function showSettingsModal() {
+  settingsModalEl.classList.remove('hidden');
+}
+
+function hideSettingsModal() {
+  settingsModalEl.classList.add('hidden');
+}
+
+function normalizeNotificationDelayMs(delayMs: number | null | undefined): number {
+  if (!Number.isFinite(delayMs)) {
+    return NOTIFICATION_DEFAULT_DELAY_MS;
+  }
+  return Math.max(0, Math.min(NOTIFICATION_MAX_DELAY_MS, Math.floor(delayMs as number)));
+}
+
+function splitDelayMs(delayMs: number): { minutes: number; seconds: number } {
+  const normalized = normalizeNotificationDelayMs(delayMs);
+  return {
+    minutes: Math.floor(normalized / 60000),
+    seconds: Math.floor((normalized % 60000) / 1000),
+  };
+}
+
+function buildCustomNotificationSoundOption(): NotificationSoundOption | null {
+  if (!state.notificationCustomSoundDataUrl) {
+    return null;
+  }
+  const displayName = state.notificationCustomSoundName?.trim() || '未命名音频';
+  return {
+    id: NOTIFICATION_SOUND_CUSTOM,
+    label: `铃声：自定义（${displayName}）`,
+    src: state.notificationCustomSoundDataUrl,
+  };
+}
+
+function buildNotificationSoundOptions(): NotificationSoundOption[] {
+  const options = [...NOTIFICATION_BUILTIN_SOUND_OPTIONS];
+  const customOption = buildCustomNotificationSoundOption();
+  if (customOption) {
+    options.push(customOption);
+  }
+  return options;
 }
 
 function normalizeNotificationSoundId(soundId: string | null | undefined): string {
   if (!soundId) {
     return NOTIFICATION_SOUND_DEFAULT;
   }
-  const matched = NOTIFICATION_SOUND_OPTIONS.find((item) => item.id === soundId);
+  const matched = buildNotificationSoundOptions().find((item) => item.id === soundId);
   return matched ? matched.id : NOTIFICATION_SOUND_DEFAULT;
 }
 
 function notificationSoundSrcById(soundId: string): string | null {
-  const matched = NOTIFICATION_SOUND_OPTIONS.find((item) => item.id === soundId);
+  const matched = buildNotificationSoundOptions().find((item) => item.id === soundId);
   return matched?.src || null;
 }
 
@@ -211,13 +320,91 @@ function applyNotificationSoundSelection(soundId: string) {
   notificationSoundSelectEl.value = normalized;
 }
 
+function applyNotificationDelaySelection(delayMs: number) {
+  const normalized = normalizeNotificationDelayMs(delayMs);
+  state.notificationDelayMs = normalized;
+  localStorage.setItem(NOTIFICATION_DELAY_STORAGE_KEY, String(normalized));
+  const { minutes, seconds } = splitDelayMs(normalized);
+  notificationDelayMinuteInputEl.value = String(minutes);
+  notificationDelaySecondInputEl.value = String(seconds);
+}
+
+function normalizeNotificationDelayInput(rawValue: string): number {
+  const parsed = Number.parseInt(rawValue.trim(), 10);
+  if (!Number.isFinite(parsed)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(59, parsed));
+}
+
+function applyNotificationDelayFromInputs() {
+  const minutes = normalizeNotificationDelayInput(notificationDelayMinuteInputEl.value);
+  const seconds = normalizeNotificationDelayInput(notificationDelaySecondInputEl.value);
+  const totalMs = minutes * 60000 + seconds * 1000;
+  applyNotificationDelaySelection(totalMs);
+}
+
+function isSupportedAudioFile(file: File): boolean {
+  if (file.type.startsWith('audio/')) {
+    return true;
+  }
+  return /\.(mp3|wav|ogg|m4a|aac|flac|opus)$/i.test(file.name);
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('读取文件失败'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function onUploadNotificationSound() {
+  const file = notificationSoundUploadInputEl.files?.[0];
+  if (!file) {
+    return;
+  }
+
+  try {
+    if (!isSupportedAudioFile(file)) {
+      showError('请选择可播放的音频文件（如 mp3/wav/ogg/m4a）');
+      return;
+    }
+    if (file.size > NOTIFICATION_MAX_UPLOAD_BYTES) {
+      showError('上传失败：音频文件需小于 4MB');
+      return;
+    }
+
+    const dataUrl = await readFileAsDataUrl(file);
+    localStorage.setItem(NOTIFICATION_CUSTOM_SOUND_STORAGE_KEY, dataUrl);
+    localStorage.setItem(NOTIFICATION_CUSTOM_SOUND_NAME_STORAGE_KEY, file.name);
+    state.notificationCustomSoundDataUrl = dataUrl;
+    state.notificationCustomSoundName = file.name;
+
+    setupNotificationSoundSelector();
+    applyNotificationSoundSelection(NOTIFICATION_SOUND_CUSTOM);
+    await playTaskFinishSound();
+  } catch (error) {
+    console.error('Upload notification sound failed:', error);
+    showError(`上传铃声失败: ${String(error)}`);
+  } finally {
+    notificationSoundUploadInputEl.value = '';
+  }
+}
+
 export function setupNotificationSoundSelector() {
-  notificationSoundSelectEl.innerHTML = NOTIFICATION_SOUND_OPTIONS.map((item) => {
-    return `<option value="${item.id}">${item.label}</option>`;
+  const soundOptions = buildNotificationSoundOptions();
+  notificationSoundSelectEl.innerHTML = soundOptions.map((item) => {
+    return `<option value="${escapeHtml(item.id)}">${escapeHtml(item.label)}</option>`;
   }).join('');
 
   const saved = normalizeNotificationSoundId(state.notificationSoundId);
   applyNotificationSoundSelection(saved);
+}
+
+export function setupNotificationDelayInputs() {
+  applyNotificationDelaySelection(state.notificationDelayMs);
 }
 
 export async function playTaskFinishSound() {
@@ -234,6 +421,24 @@ export async function playTaskFinishSound() {
   } catch (error) {
     console.warn('Play task finish sound failed:', error);
   }
+}
+
+export function scheduleTaskFinishSound() {
+  if (notificationSoundTimerId !== null) {
+    window.clearTimeout(notificationSoundTimerId);
+    notificationSoundTimerId = null;
+  }
+
+  const delayMs = normalizeNotificationDelayMs(state.notificationDelayMs);
+  if (delayMs === 0) {
+    void playTaskFinishSound();
+    return;
+  }
+
+  notificationSoundTimerId = window.setTimeout(() => {
+    notificationSoundTimerId = null;
+    void playTaskFinishSound();
+  }, delayMs);
 }
 
 
@@ -263,7 +468,7 @@ export function setComposerState(state: ComposerState, hint: string) {
   if (state === 'ready') {
     messageInputEl.disabled = false;
     setSendButtonMode('send', false);
-    messageInputEl.placeholder = '输入消息...';
+    messageInputEl.placeholder = '输入消息，或输入 / 查看命令...';
     updateSlashCommandMenu();
     return;
   }
@@ -285,7 +490,7 @@ export function refreshComposerState() {
   const hasSession = Boolean(state.currentSessionId);
   const isBusy = isCurrentAgentBusy();
 
-  if (!isConnected || !hasSession) {
+  if (!hasSession) {
     setComposerState('disabled', '请选择在线 Agent 与会话后输入');
     newSessionBtnEl.disabled = !isConnected;
     clearChatBtnEl.disabled = true;
@@ -299,7 +504,15 @@ export function refreshComposerState() {
     return;
   }
 
-  setComposerState('ready', '当前会话已完成，可继续输入');
+  if (!isConnected) {
+    setComposerState('ready', '当前 Agent 离线，仅可输入本地命令（如 /agents autoreconnect）');
+    messageInputEl.placeholder = '输入本地命令，例如 /agents autoreconnect';
+    newSessionBtnEl.disabled = true;
+    clearChatBtnEl.disabled = false;
+    return;
+  }
+
+  setComposerState('ready', '当前会话已完成，可继续输入（输入 / 可查看命令）');
   newSessionBtnEl.disabled = false;
   clearChatBtnEl.disabled = false;
 }
@@ -388,7 +601,7 @@ export function setupTauriEventListeners() {
       refreshComposerState();
     }
 
-    void playTaskFinishSound();
+    scheduleTaskFinishSound();
   });
 
   onAgentError((payload) => {
@@ -683,7 +896,9 @@ export function handleSlashMenuKeydown(event: KeyboardEvent): boolean {
 // 设置事件监听
 export function setupEventListeners() {
   console.log('Setting up event listeners...');
+  setupAutoReconnectModeSelector();
   setupNotificationSoundSelector();
+  setupNotificationDelayInputs();
 
   themeToggleBtnEl.addEventListener('click', () => {
     state.currentTheme = THEME_CYCLE[state.currentTheme];
@@ -694,6 +909,17 @@ export function setupEventListeners() {
     applyNotificationSoundSelection(notificationSoundSelectEl.value);
     void playTaskFinishSound();
   });
+  notificationDelayMinuteInputEl.addEventListener('change', applyNotificationDelayFromInputs);
+  notificationDelaySecondInputEl.addEventListener('change', applyNotificationDelayFromInputs);
+  notificationDelayMinuteInputEl.addEventListener('blur', applyNotificationDelayFromInputs);
+  notificationDelaySecondInputEl.addEventListener('blur', applyNotificationDelayFromInputs);
+  notificationSoundUploadBtnEl.addEventListener('click', () => {
+    notificationSoundUploadInputEl.click();
+  });
+  notificationSoundUploadInputEl.addEventListener('change', () => {
+    void onUploadNotificationSound();
+  });
+  autoReconnectModeSelectEl.addEventListener('change', onAutoReconnectModeChange);
   openToolCallsBtnEl.addEventListener('click', () => {
     if (!state.currentAgentId) {
       showError('请先选择 Agent');
@@ -706,7 +932,7 @@ export function setupEventListeners() {
       showError('请先选择 Agent');
       return;
     }
-    showGitChangesForAgent(state.currentAgentId);
+    showGitChangesForAgent(state.currentAgentId, true);
     void refreshCurrentAgentGitChanges();
   });
   toggleThinkBtnEl.addEventListener('click', () => {
@@ -716,6 +942,9 @@ export function setupEventListeners() {
   addAgentBtnEl.addEventListener('click', () => {
     addAgentModalEl.classList.remove('hidden');
   });
+  openSettingsBtnEl.addEventListener('click', showSettingsModal);
+  closeSettingsModalBtnEl.addEventListener('click', hideSettingsModal);
+  closeSettingsFooterBtnEl.addEventListener('click', hideSettingsModal);
 
   closeModalBtnEl.addEventListener('click', hideModal);
   cancelAddAgentBtnEl.addEventListener('click', hideModal);
@@ -731,6 +960,11 @@ export function setupEventListeners() {
       closeGitDiffModal();
     }
   });
+  settingsModalEl.addEventListener('click', (event) => {
+    if (event.target === settingsModalEl) {
+      hideSettingsModal();
+    }
+  });
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') {
       return;
@@ -741,6 +975,10 @@ export function setupEventListeners() {
     }
     if (!artifactPreviewModalEl.classList.contains('hidden')) {
       closeArtifactPreviewModal();
+      return;
+    }
+    if (!settingsModalEl.classList.contains('hidden')) {
+      hideSettingsModal();
       return;
     }
     if (!renameAgentModalEl.classList.contains('hidden')) {
@@ -937,7 +1175,43 @@ export async function sendMessage() {
   const content = messageInputEl.value.trim();
   const requestAgentId = state.currentAgentId;
   const requestSessionId = state.currentSessionId;
-  if (!content || !requestAgentId || !requestSessionId || state.inflightSessionByAgent[requestAgentId]) {
+  if (!content || !requestSessionId) {
+    return;
+  }
+
+  if (requestAgentId && state.inflightSessionByAgent[requestAgentId]) {
+    return;
+  }
+
+  const handledByLocalAgentCommand = await handleLocalAgentCommand(content, requestSessionId);
+  if (handledByLocalAgentCommand) {
+    messageInputEl.value = '';
+    messageInputEl.style.height = 'auto';
+    hideSlashCommandMenu();
+    return;
+  }
+
+  if (requestAgentId) {
+    const handledByLocalModelCommand = await handleLocalModelCommand(
+      content,
+      requestAgentId,
+      requestSessionId
+    );
+    if (handledByLocalModelCommand) {
+      messageInputEl.value = '';
+      messageInputEl.style.height = 'auto';
+      hideSlashCommandMenu();
+      return;
+    }
+  }
+
+  if (!requestAgentId) {
+    return;
+  }
+
+  const requestAgent = state.agents.find((agent) => agent.id === requestAgentId);
+  if (requestAgent?.status !== 'connected') {
+    showError('当前 Agent 离线，仅支持本地命令。可输入 /agents autoreconnect 重连。');
     return;
   }
 
@@ -946,15 +1220,6 @@ export async function sendMessage() {
   messageInputEl.value = '';
   messageInputEl.style.height = 'auto';
   hideSlashCommandMenu();
-
-  const handledByLocalModelCommand = await handleLocalModelCommand(
-    content,
-    requestAgentId,
-    requestSessionId
-  );
-  if (handledByLocalModelCommand) {
-    return;
-  }
 
   const sendingMessage: Message = {
     id: `msg-${Date.now()}-sending`,

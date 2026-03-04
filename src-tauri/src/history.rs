@@ -36,6 +36,23 @@ fn normalize_workspace_path(workspace_path: &str) -> String {
     normalized
 }
 
+fn is_same_or_ancestor(base: &str, path: &str) -> bool {
+    if base == path {
+        return true;
+    }
+    if base == "/" {
+        return path.starts_with('/');
+    }
+    let prefix = format!("{}/", base);
+    path.starts_with(&prefix)
+}
+
+fn workspace_path_matches(expected_workspace_path: &str, record_cwd: &str) -> bool {
+    let expected = normalize_workspace_path(expected_workspace_path);
+    let actual = normalize_workspace_path(record_cwd);
+    is_same_or_ancestor(&expected, &actual) || is_same_or_ancestor(&actual, &expected)
+}
+
 fn workspace_to_iflow_project_key(workspace_path: &str) -> String {
     let normalized = normalize_workspace_path(workspace_path);
     let mut key = normalized.replace('/', "-").replace(':', "-");
@@ -67,6 +84,37 @@ fn iflow_project_dirs_for_workspace(
     }
 
     Ok(candidates)
+}
+
+async fn list_all_iflow_project_dirs() -> Result<Vec<PathBuf>, String> {
+    let root = iflow_projects_root()?;
+    let mut dirs = Vec::new();
+    let mut reader = match tokio::fs::read_dir(&root).await {
+        Ok(reader) => reader,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(dirs),
+        Err(error) => {
+            return Err(format!(
+                "Failed to open iFlow projects root {}: {}",
+                root.display(),
+                error
+            ))
+        }
+    };
+
+    while let Some(entry) = reader
+        .next_entry()
+        .await
+        .map_err(|e| format!("Failed to read iFlow projects root entry: {}", e))?
+    {
+        let path = entry.path();
+        match entry.file_type().await {
+            Ok(file_type) if file_type.is_dir() => dirs.push(path),
+            Ok(_) => continue,
+            Err(_) => continue,
+        }
+    }
+
+    Ok(dirs)
 }
 
 fn to_rfc3339_or_now(system_time: Option<std::time::SystemTime>) -> String {
@@ -256,7 +304,7 @@ async fn parse_iflow_history_summary(
 
         if let Some(cwd) = extract_history_record_cwd(&record) {
             has_cwd = true;
-            if cwd == expected_workspace_path {
+            if workspace_path_matches(expected_workspace_path, &cwd) {
                 workspace_matches = true;
             }
         }
@@ -329,7 +377,7 @@ async fn parse_iflow_history_messages(
 
         if let Some(cwd) = extract_history_record_cwd(&record) {
             has_cwd = true;
-            if cwd == expected_workspace_path {
+            if workspace_path_matches(expected_workspace_path, &cwd) {
                 workspace_matches = true;
             }
         }
@@ -424,6 +472,46 @@ pub async fn list_iflow_history_sessions(
         }
     }
 
+    if sessions.is_empty() {
+        let fallback_dirs = list_all_iflow_project_dirs().await?;
+        for project_dir in fallback_dirs {
+            let mut reader = match tokio::fs::read_dir(&project_dir).await {
+                Ok(reader) => reader,
+                Err(error) if error.kind() == ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(format!(
+                        "Failed to open iFlow project dir {}: {}",
+                        project_dir.display(),
+                        error
+                    ))
+                }
+            };
+
+            while let Some(entry) = reader
+                .next_entry()
+                .await
+                .map_err(|e| format!("Failed to read iFlow project entry: {}", e))?
+            {
+                let path = entry.path();
+                let file_name = entry.file_name();
+                let file_name = file_name.to_string_lossy();
+                if !file_name.starts_with("session-") || !file_name.ends_with(".jsonl") {
+                    continue;
+                }
+
+                let session_id = file_name.trim_end_matches(".jsonl").to_string();
+                if !seen_sessions.insert(session_id.clone()) {
+                    continue;
+                }
+                if let Ok(Some(summary)) =
+                    parse_iflow_history_summary(&path, &session_id, &normalized_workspace).await
+                {
+                    sessions.push(summary);
+                }
+            }
+        }
+    }
+
     sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     Ok(sessions)
 }
@@ -442,6 +530,26 @@ pub async fn load_iflow_history_messages(
     let candidate_dirs = iflow_project_dirs_for_workspace(&workspace_path, &normalized_workspace)?;
 
     for project_dir in candidate_dirs {
+        let file_path = project_dir.join(format!("{}.jsonl", normalized_session_id));
+        match tokio::fs::metadata(&file_path).await {
+            Ok(metadata) if metadata.is_file() => {
+                return parse_iflow_history_messages(
+                    &file_path,
+                    &normalized_session_id,
+                    &normalized_workspace,
+                )
+                .await;
+            }
+            Ok(_) => continue,
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(format!("Failed to inspect {}: {}", file_path.display(), error));
+            }
+        }
+    }
+
+    let fallback_dirs = list_all_iflow_project_dirs().await?;
+    for project_dir in fallback_dirs {
         let file_path = project_dir.join(format!("{}.jsonl", normalized_session_id));
         match tokio::fs::metadata(&file_path).await {
             Ok(metadata) if metadata.is_file() => {
@@ -489,7 +597,44 @@ pub async fn delete_iflow_history_session(
         }
     }
 
+    let fallback_dirs = list_all_iflow_project_dirs().await?;
+    for project_dir in fallback_dirs {
+        let file_path = project_dir.join(format!("{}.jsonl", normalized_session_id));
+        match tokio::fs::remove_file(&file_path).await {
+            Ok(_) => return Ok(true),
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(format!("Failed to delete {}: {}", file_path.display(), error));
+            }
+        }
+    }
+
     Ok(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::workspace_path_matches;
+
+    #[test]
+    fn workspace_match_supports_exact_and_parent_child() {
+        assert!(workspace_path_matches(
+            "/Users/chenweilong/playground/iflow/iflow-workspace",
+            "/Users/chenweilong/playground/iflow/iflow-workspace"
+        ));
+        assert!(workspace_path_matches(
+            "/Users/chenweilong/playground",
+            "/Users/chenweilong/playground/iflow/iflow-workspace"
+        ));
+        assert!(workspace_path_matches(
+            "/Users/chenweilong/playground/iflow/iflow-workspace",
+            "/Users/chenweilong/playground"
+        ));
+        assert!(!workspace_path_matches(
+            "/Users/chenweilong/playground",
+            "/Users/chenweilong/Downloads"
+        ));
+    }
 }
 
 #[tauri::command]

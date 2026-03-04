@@ -1754,7 +1754,7 @@ dependencies = [
 
 [[package]]
 name = "iflow-workspace"
-version = "0.3.6"
+version = "0.3.8"
 dependencies = [
  "chrono",
  "futures",

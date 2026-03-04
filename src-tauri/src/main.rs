@@ -16,6 +16,7 @@ mod manager;
 mod model_resolver;
 mod models;
 mod router;
+mod runtime_env;
 mod state;
 mod storage;
 

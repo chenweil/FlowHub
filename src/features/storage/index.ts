@@ -207,14 +207,16 @@ export function persistCurrentSessionMessages() {
   if (!state.currentSessionId) {
     return;
   }
-  const session = findSessionByIdInState(state.currentSessionId);
-  if (session?.source === 'iflow-log') {
-    return;
-  }
+
   state.messagesBySession[state.currentSessionId] = state.messages.map((msg) => ({
     ...msg,
     timestamp: new Date(msg.timestamp),
   }));
+
+  const session = findSessionByIdInState(state.currentSessionId);
+  if (session?.source === 'iflow-log') {
+    return;
+  }
   void saveSessionMessages();
 }
 

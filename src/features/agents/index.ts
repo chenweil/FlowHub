@@ -96,11 +96,89 @@ const THINK_UNSUPPORTED_HINTS = [
   '未实现',
 ];
 
+export type AutoReconnectMode = 'all' | 'last' | 'off';
+
+const AUTO_RECONNECT_MODE_STORAGE_KEY = 'iflow-auto-reconnect-mode';
+const AUTO_RECONNECT_MODE_DEFAULT: AutoReconnectMode = 'last';
+const LAST_CONNECTED_AGENT_STORAGE_KEY = 'iflow-last-connected-agent-id';
+
+function normalizeAutoReconnectMode(rawValue: string | null | undefined): AutoReconnectMode {
+  const normalized = String(rawValue || '').trim().toLowerCase();
+  if (normalized === 'all' || normalized === 'last' || normalized === 'off') {
+    return normalized;
+  }
+  return AUTO_RECONNECT_MODE_DEFAULT;
+}
+
+export function getAutoReconnectMode(): AutoReconnectMode {
+  try {
+    return normalizeAutoReconnectMode(localStorage.getItem(AUTO_RECONNECT_MODE_STORAGE_KEY));
+  } catch (error) {
+    console.error('Read auto reconnect mode failed:', error);
+    return AUTO_RECONNECT_MODE_DEFAULT;
+  }
+}
+
+export function setAutoReconnectMode(mode: AutoReconnectMode): void {
+  try {
+    localStorage.setItem(AUTO_RECONNECT_MODE_STORAGE_KEY, mode);
+  } catch (error) {
+    console.error('Save auto reconnect mode failed:', error);
+  }
+}
+
+function readLastConnectedAgentId(): string | null {
+  try {
+    const value = localStorage.getItem(LAST_CONNECTED_AGENT_STORAGE_KEY);
+    if (!value) {
+      return null;
+    }
+    const normalized = value.trim();
+    return normalized.length > 0 ? normalized : null;
+  } catch (error) {
+    console.error('Read last connected agent failed:', error);
+    return null;
+  }
+}
+
+function markLastConnectedAgent(agentId: string): void {
+  try {
+    localStorage.setItem(LAST_CONNECTED_AGENT_STORAGE_KEY, agentId);
+  } catch (error) {
+    console.error('Save last connected agent failed:', error);
+  }
+}
+
+function removeLastConnectedAgentIfMatches(agentId: string): void {
+  const lastAgentId = readLastConnectedAgentId();
+  if (lastAgentId !== agentId) {
+    return;
+  }
+  try {
+    localStorage.removeItem(LAST_CONNECTED_AGENT_STORAGE_KEY);
+  } catch (error) {
+    console.error('Clear last connected agent failed:', error);
+  }
+}
+
 function readErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message) {
     return error.message;
   }
   return String(error);
+}
+
+function normalizeConnectionErrorMessage(error: unknown): string {
+  const message = readErrorMessage(error);
+  const lower = message.toLowerCase();
+  if (
+    lower.includes('__tauri_ipc__') ||
+    lower.includes('__tauri_internals__') ||
+    lower.includes('tauri is not available')
+  ) {
+    return '当前是浏览器预览模式，无法连接 Agent。请使用已安装 App，或执行 npm run tauri:dev。';
+  }
+  return message;
 }
 
 function normalizeThinkModelKey(modelName: string | undefined): string | null {
@@ -329,7 +407,7 @@ export function openCurrentAgentToolCallsPanel() {
   });
 }
 
-export function showGitChangesForAgent(agentId: string) {
+export function showGitChangesForAgent(agentId: string, forceOpen = false) {
   if (agentId !== state.currentAgentId) {
     return;
   }
@@ -340,7 +418,7 @@ export function showGitChangesForAgent(agentId: string) {
   const disableRefresh = Boolean(state.inflightSessionByAgent[agentId]);
 
   void import('../ui').then(({ showGitChanges }) => {
-    showGitChanges(changes, { loading, error, lastRefreshedAt, disableRefresh });
+    showGitChanges(changes, { loading, error, lastRefreshedAt, disableRefresh, forceOpen });
   });
 }
 
@@ -671,6 +749,7 @@ export async function addAgent(name: string, iflowPath: string, workspacePath: s
     };
 
     state.agents.push(agent);
+    markLastConnectedAgent(agentId);
     ensureAgentHasSessions(agentId);
 
     await saveAgents();
@@ -682,7 +761,7 @@ export async function addAgent(name: string, iflowPath: string, workspacePath: s
     showSuccess('iFlow 连接成功！');
   } catch (error) {
     console.error('Connection error:', error);
-    showError(`连接错误: ${String(error)}`);
+    showError(`连接错误: ${normalizeConnectionErrorMessage(error)}`);
   } finally {
     hideLoading();
   }
@@ -768,6 +847,7 @@ export async function deleteAgent(agentId: string) {
   }
 
   state.agents = state.agents.filter((a) => a.id !== agentId);
+  removeLastConnectedAgentIfMatches(agentId);
   if (state.modelSwitchingAgentId === agentId) {
     state.modelSwitchingAgentId = null;
   }
@@ -885,8 +965,8 @@ export function renderAgentList() {
         <div class="status-indicator ${agent.status}"></div>
         <button class="btn-edit" data-action="rename" data-agent-id="${agent.id}" title="编辑名称">✎</button>
         ${
-          agent.status === 'disconnected'
-            ? `<button class="btn-reconnect" data-action="reconnect" data-agent-id="${agent.id}" title="重新连接">↻</button>`
+          agent.status !== 'connected'
+            ? `<button class="btn-reconnect" data-action="reconnect" data-agent-id="${agent.id}" title="重连 Agent">↻</button>`
             : ''
         }
         <button class="btn-delete" data-action="delete" data-agent-id="${agent.id}" title="删除">×</button>
@@ -910,10 +990,25 @@ export function renderAgentList() {
 }
 
 export async function reconnectAgent(agentId: string) {
+  const options: ReconnectAgentOptions = {};
+  return reconnectAgentWithOptions(agentId, options);
+}
+
+interface ReconnectAgentOptions {
+  silent?: boolean;
+  selectOnSuccess?: boolean;
+  showSuccessToast?: boolean;
+}
+
+async function reconnectAgentWithOptions(agentId: string, options: ReconnectAgentOptions) {
   const agent = state.agents.find((a) => a.id === agentId);
   if (!agent) {
     return;
   }
+
+  const silent = Boolean(options.silent);
+  const selectOnSuccess = options.selectOnSuccess !== false;
+  const showSuccessToast = options.showSuccessToast !== false;
 
   agent.status = 'connecting';
   renderAgentList();
@@ -922,8 +1017,12 @@ export async function reconnectAgent(agentId: string) {
     const result = await connectIflow(agent.id, agent.iflowPath || 'iflow', agent.workspacePath, agent.selectedModel || null);
 
     if (!result.success) {
-      agent.status = 'error';
-      showError(result.error || '连接失败');
+      agent.status = silent ? 'disconnected' : 'error';
+      if (!silent) {
+        showError(result.error || '连接失败');
+      } else {
+        console.warn(`[auto-reconnect] Agent ${agent.id} connect failed:`, result.error || '连接失败');
+      }
       renderAgentList();
       updateCurrentAgentModelUI();
       return;
@@ -931,6 +1030,7 @@ export async function reconnectAgent(agentId: string) {
 
     agent.status = 'connected';
     agent.port = result.port;
+    markLastConnectedAgent(agent.id);
     if (agent.thinkEnabled) {
       try {
         await tauriToggleAgentThink(agent.id, true, 'think');
@@ -946,12 +1046,18 @@ export async function reconnectAgent(agentId: string) {
       }
     }
     await saveAgents();
-    selectAgent(agent.id);
-    showSuccess('重新连接成功！');
+    if (selectOnSuccess) {
+      selectAgent(agent.id);
+    }
+    if (!silent && showSuccessToast) {
+      showSuccess('重新连接成功！');
+    }
   } catch (error) {
     console.error('Reconnection error:', error);
-    agent.status = 'error';
-    showError(`连接错误: ${String(error)}`);
+    agent.status = silent ? 'disconnected' : 'error';
+    if (!silent) {
+      showError(`连接错误: ${normalizeConnectionErrorMessage(error)}`);
+    }
   }
 
   renderAgentList();
@@ -960,6 +1066,73 @@ export async function reconnectAgent(agentId: string) {
   void import('../app').then(({ refreshComposerState }) => {
     refreshComposerState();
   });
+}
+
+async function autoReconnectSavedAgents() {
+  const mode = getAutoReconnectMode();
+  if (mode === 'off') {
+    return;
+  }
+
+  const reconnectTargets = state.agents.filter((agent) => agent.status === 'disconnected');
+  if (reconnectTargets.length === 0) {
+    return;
+  }
+
+  const reconnectOptions: ReconnectAgentOptions = {
+    silent: true,
+    selectOnSuccess: false,
+    showSuccessToast: false,
+  };
+
+  if (mode === 'all') {
+    for (const agent of reconnectTargets) {
+      await reconnectAgentWithOptions(agent.id, reconnectOptions);
+    }
+    return;
+  }
+
+  const lastConnectedAgentId = readLastConnectedAgentId();
+  const preferredAgent =
+    reconnectTargets.find((agent) => agent.id === lastConnectedAgentId) || reconnectTargets[0];
+  if (!preferredAgent) {
+    return;
+  }
+  await reconnectAgentWithOptions(preferredAgent.id, reconnectOptions);
+}
+
+interface ParsedAgentAutoReconnectCommand {
+  kind: 'show' | 'set' | 'invalid';
+  mode?: AutoReconnectMode;
+}
+
+function parseAgentAutoReconnectCommand(content: string): ParsedAgentAutoReconnectCommand | null {
+  const trimmed = content.trim();
+  if (!trimmed.startsWith('/')) {
+    return null;
+  }
+
+  const parts = trimmed.split(/\s+/);
+  if (parts.length < 2) {
+    return null;
+  }
+  if (parts[0].toLowerCase() !== '/agents') {
+    return null;
+  }
+  if (parts[1].toLowerCase() !== 'autoreconnect') {
+    return null;
+  }
+
+  if (parts.length === 2) {
+    return { kind: 'show' };
+  }
+
+  const mode = normalizeAutoReconnectMode(parts[2]);
+  const rawMode = parts[2].trim().toLowerCase();
+  if (mode !== rawMode) {
+    return { kind: 'invalid' };
+  }
+  return { kind: 'set', mode };
 }
 
 // 更新 Agent 状态 UI
@@ -1418,6 +1591,65 @@ export async function handleLocalModelCommand(
   return true;
 }
 
+export async function handleLocalAgentCommand(
+  content: string,
+  sessionId: string,
+): Promise<boolean> {
+  const command = parseAgentAutoReconnectCommand(content);
+  if (!command) {
+    return false;
+  }
+
+  const sessionMessages = getMessagesForSession(sessionId);
+  const userMessage: Message = {
+    id: `msg-${Date.now()}-agent-user`,
+    role: 'user',
+    content,
+    timestamp: new Date(),
+  };
+  sessionMessages.push(userMessage);
+  commitSessionMessages(sessionId, sessionMessages);
+
+  if (command.kind === 'invalid') {
+    const invalidMessage: Message = {
+      id: `msg-${Date.now()}-agent-autoreconnect-invalid`,
+      role: 'system',
+      content: '⚠ 参数无效。用法：/agents autoreconnect [last|all|off]',
+      timestamp: new Date(),
+    };
+    sessionMessages.push(invalidMessage);
+    commitSessionMessages(sessionId, sessionMessages);
+    return true;
+  }
+
+  if (command.kind === 'show') {
+    const mode = getAutoReconnectMode();
+    const showMessage: Message = {
+      id: `msg-${Date.now()}-agent-autoreconnect-show`,
+      role: 'system',
+      content:
+        `⚙️ 当前自动重连模式：${mode}\n` +
+        '可选值：last（仅最后一个） / all（全部） / off（关闭）\n' +
+        '设置示例：/agents autoreconnect last',
+      timestamp: new Date(),
+    };
+    sessionMessages.push(showMessage);
+    commitSessionMessages(sessionId, sessionMessages);
+    return true;
+  }
+
+  setAutoReconnectMode(command.mode || AUTO_RECONNECT_MODE_DEFAULT);
+  const setMessage: Message = {
+    id: `msg-${Date.now()}-agent-autoreconnect-set`,
+    role: 'system',
+    content: `✅ 自动重连模式已设置为：${command.mode}`,
+    timestamp: new Date(),
+  };
+  sessionMessages.push(setMessage);
+  commitSessionMessages(sessionId, sessionMessages);
+  return true;
+}
+
 // ── Agent persistence ─────────────────────────────────────────────────────────
 
 // 加载 Agent 列表
@@ -1453,6 +1685,7 @@ export async function loadAgents() {
     renderSessionList();
     updateCurrentAgentModelUI();
     updateCurrentAgentThinkUI();
+    await autoReconnectSavedAgents();
   } catch (e) {
     console.error('Failed to load agents:', e);
   }
