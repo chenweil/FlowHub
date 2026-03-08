@@ -140,12 +140,7 @@ const DEFAULT_SLASH_COMMANDS: ReadonlyArray<{ command: string; description: stri
   { command: '/model <name|编号>', description: '切换当前 Agent 模型（本地实现）' },
   { command: '/directory show', description: '查看当前会话可见目录' },
   { command: '/directory add <path>', description: '添加额外目录到会话上下文' },
-  { command: '/commands', description: '列出可用命令' },
-  { command: '/tools', description: '查看工具列表' },
   { command: '/memory show', description: '查看当前记忆' },
-  { command: '/stats', description: '查看会话统计' },
-  { command: '/mcp list', description: '查看 MCP 列表' },
-  { command: '/agents list', description: '查看可用 Agent' },
   { command: '/agents autoreconnect', description: '查看自动重连模式（last/all/off）' },
   { command: '/agents autoreconnect <last|all|off>', description: '设置自动重连模式' },
 ];

@@ -238,6 +238,9 @@ export function normalizeRegistryCommands(rawEntries: unknown[] | undefined): Re
 
     const name = rawName.startsWith('/') ? rawName : `/${rawName}`;
     const dedupeKey = name.toLowerCase();
+    if (dedupeKey === '/test') {
+      continue;
+    }
     if (seen.has(dedupeKey)) {
       continue;
     }
