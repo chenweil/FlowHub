@@ -2,6 +2,7 @@
 import type { RegistryCommand, RegistryMcpServer, ModelOption } from '../../types';
 import { state } from '../../store';
 import { readTextFromUnknown } from './utils';
+import { normalizeModelOption } from './model';
 import { saveAgents, renderAgentList } from './actions';
 import { updateCurrentAgentModelUI, updateCurrentAgentThinkUI, renderCurrentAgentModelMenu } from './ui';
 
@@ -141,20 +142,4 @@ export function applyAgentModelRegistry(
 
 // ── Model option normalizer ───────────────────────────────────────────────────
 
-export function normalizeModelOption(raw: unknown): ModelOption | null {
-  if (!raw || typeof raw !== 'object') {
-    return null;
-  }
-
-  const obj = raw as Record<string, unknown>;
-
-  const value = readTextFromUnknown(obj.value);
-  if (!value) {
-    return null;
-  }
-
-  return {
-    value,
-    label: readTextFromUnknown(obj.label) || value,
-  };
-}
+export { normalizeModelOption };

@@ -1,9 +1,12 @@
 // src/features/agents/commands.ts — Local command handlers
 import type { Message } from '../../types';
 import { getMessagesForSession, commitSessionMessages } from '../sessions';
-import { getAutoReconnectMode, setAutoReconnectMode, parseAgentAutoReconnectCommand } from './reconnect';
-
-const AUTO_RECONNECT_MODE_DEFAULT = 'last';
+import {
+  AUTO_RECONNECT_MODE_DEFAULT,
+  getAutoReconnectMode,
+  setAutoReconnectMode,
+  parseAgentAutoReconnectCommand,
+} from './reconnect';
 
 // ── Agent Auto Reconnect Command ──────────────────────────────────────────────
 

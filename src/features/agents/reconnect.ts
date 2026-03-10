@@ -6,9 +6,9 @@ import { readLastConnectedAgentId, markLastConnectedAgent, normalizeConnectionEr
 
 export type AutoReconnectMode = 'all' | 'last' | 'off';
 const AUTO_RECONNECT_MODE_STORAGE_KEY = 'iflow-auto-reconnect-mode';
-const AUTO_RECONNECT_MODE_DEFAULT: AutoReconnectMode = 'last';
+export const AUTO_RECONNECT_MODE_DEFAULT: AutoReconnectMode = 'last';
 
-function normalizeAutoReconnectMode(rawValue: string | null | undefined): AutoReconnectMode {
+export function normalizeAutoReconnectMode(rawValue: string | null | undefined): AutoReconnectMode {
   const normalized = String(rawValue || '').trim().toLowerCase();
   if (normalized === 'all' || normalized === 'last' || normalized === 'off') {
     return normalized;

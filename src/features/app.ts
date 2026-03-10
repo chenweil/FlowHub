@@ -109,6 +109,7 @@ import {
   handleLocalAgentCommand,
   type AutoReconnectMode,
   getAutoReconnectMode,
+  normalizeAutoReconnectMode,
   setAutoReconnectMode,
   syncAgentModelFromAboutContent,
   toggleCurrentAgentThink,
@@ -159,7 +160,6 @@ const NOTIFICATION_SOUND_STORAGE_KEY = 'iflow-notification-sound';
 const NOTIFICATION_CUSTOM_SOUND_STORAGE_KEY = 'iflow-notification-custom-sound';
 const NOTIFICATION_CUSTOM_SOUND_NAME_STORAGE_KEY = 'iflow-notification-custom-sound-name';
 const NOTIFICATION_DELAY_STORAGE_KEY = 'iflow-notification-delay-ms';
-const AUTO_RECONNECT_MODE_DEFAULT: AutoReconnectMode = 'last';
 const NOTIFICATION_SOUND_NONE = 'none';
 const NOTIFICATION_SOUND_CUSTOM = 'custom-upload';
 const NOTIFICATION_SOUND_DEFAULT = 'short-01.mp3';
@@ -225,14 +225,6 @@ const AUTO_RECONNECT_MODE_LABELS: Record<AutoReconnectMode, string> = {
   all: '全部',
   off: '关闭',
 };
-
-function normalizeAutoReconnectMode(rawValue: string | null | undefined): AutoReconnectMode {
-  const normalized = String(rawValue || '').trim().toLowerCase() as AutoReconnectMode | string;
-  if (normalized === 'last' || normalized === 'all' || normalized === 'off') {
-    return normalized as AutoReconnectMode;
-  }
-  return AUTO_RECONNECT_MODE_DEFAULT;
-}
 
 function setupAutoReconnectModeSelector() {
   const mode = getAutoReconnectMode();

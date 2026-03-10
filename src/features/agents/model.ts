@@ -2,7 +2,7 @@
 import { listAvailableModels, switchAgentModel as tauriSwitchAgentModel, toggleAgentThink as tauriToggleAgentThink } from '../../services/tauri';
 import type { Agent, Message, ModelOption, ParsedModelSlashCommand } from '../../types';
 import { state } from '../../store';
-import { readErrorMessage, isThinkUnsupportedError, getThinkSupportByModel, setThinkSupportByModel, showError, showSuccess } from './utils';
+import { readErrorMessage, readTextFromUnknown, isThinkUnsupportedError, getThinkSupportByModel, setThinkSupportByModel, showError, showSuccess } from './utils';
 import { renderAgentList, saveAgents } from './actions';
 import { updateCurrentAgentModelUI, updateCurrentAgentThinkUI, updateAgentStatusUI, renderCurrentAgentModelMenu, closeCurrentAgentModelMenu, currentAgentModelLabel } from './ui';
 
@@ -30,12 +30,12 @@ export function normalizeModelOption(raw: unknown): ModelOption | null {
   }
 
   const record = raw as Record<string, unknown>;
-  const value = typeof record.value === 'string' ? record.value.trim() : '';
+  const value = readTextFromUnknown(record.value);
   if (!value) {
     return null;
   }
 
-  const labelCandidate = typeof record.label === 'string' ? record.label.trim() : '';
+  const labelCandidate = readTextFromUnknown(record.label);
   return {
     value,
     label: labelCandidate || value,
