@@ -94,6 +94,8 @@ export {
 export {
   type AutoReconnectMode,
   type ReconnectAgentOptions,
+  AUTO_RECONNECT_MODE_DEFAULT,
+  normalizeAutoReconnectMode,
   getAutoReconnectMode,
   setAutoReconnectMode,
   reconnectAgent,
