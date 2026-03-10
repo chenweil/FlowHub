@@ -10,7 +10,7 @@
       })();
     </script>
     <link rel="stylesheet" href="/src/styles.css" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>flow hub</title>
   </head>
   <body>
@@ -66,16 +66,32 @@
           <div class="toolbar-actions">
             <button id="open-settings-btn" class="btn-secondary" type="button" aria-label="打开设置">设置</button>
             <button id="toggle-think-btn" class="btn-secondary think-toggle-btn" aria-label="切换思考模式" disabled>思考：关</button>
-            <button id="open-tool-calls-btn" class="btn-secondary" aria-label="打开工具调用面板">工具调用</button>
-            <button id="open-git-changes-btn" class="btn-secondary" aria-label="打开文件变更面板">文件变更</button>
             <button id="new-session-btn" class="btn-secondary" disabled>新建会话</button>
-            <button id="clear-chat-btn" class="btn-secondary" disabled>清空当前会话</button>
+            
+            <div class="toolbar-more-wrapper">
+              <button id="toolbar-more-btn" class="btn-secondary" type="button" aria-label="更多操作">更多 ⋯</button>
+              <div id="toolbar-more-menu" class="toolbar-more-menu hidden">
+                <button id="open-tool-calls-btn" class="toolbar-menu-item" aria-label="打开工具调用面板">
+                  <span class="toolbar-menu-icon">🔧</span>
+                  <span class="toolbar-menu-text">工具调用</span>
+                </button>
+                <button id="open-git-changes-btn" class="toolbar-menu-item" aria-label="打开文件变更面板">
+                  <span class="toolbar-menu-icon">📝</span>
+                  <span class="toolbar-menu-text">文件变更</span>
+                </button>
+                <div class="toolbar-menu-divider"></div>
+                <button id="clear-chat-btn" class="toolbar-menu-item toolbar-menu-item-danger" disabled>
+                  <span class="toolbar-menu-icon">🗑️</span>
+                  <span class="toolbar-menu-text">清空当前会话</span>
+                </button>
+              </div>
+            </div>
           </div>
         </header>
 
         <!-- 对话区域 -->
         <div class="chat-container">
-          <div id="chat-messages" class="chat-messages">
+          <div id="chat-messages" class="chat-messages" role="log" aria-label="聊天消息列表">
             <div class="welcome-message">
               <h3>👋 欢迎使用 flow hub</h3>
               <p>从左侧选择一个 Agent 开始对话，或添加新的 Agent。</p>
@@ -120,9 +136,10 @@
                 placeholder="输入消息..." 
                 rows="1"
                 disabled
+                aria-label="消息输入框"
               ></textarea>
             </div>
-            <button id="send-btn" class="btn-send" disabled>
+            <button id="send-btn" class="btn-send" disabled aria-label="发送消息">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="22" y1="2" x2="11" y2="13"></line>
                 <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
@@ -137,25 +154,25 @@
     </div>
 
     <!-- 添加 Agent 弹窗 -->
-    <div id="add-agent-modal" class="modal hidden">
+    <div id="add-agent-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="add-agent-modal-title">
       <div class="modal-content">
         <div class="modal-header">
-          <h3>添加 iFlow Agent</h3>
-          <button id="close-modal" class="btn-icon">×</button>
+          <h3 id="add-agent-modal-title">添加 iFlow Agent</h3>
+          <button id="close-modal" class="btn-icon" aria-label="关闭添加 Agent 弹窗">×</button>
         </div>
         <div class="modal-body">
           <div class="form-group">
             <label for="agent-name">Agent 名称</label>
-            <input type="text" id="agent-name" placeholder="我的 iFlow" value="iFlow">
+            <input type="text" id="agent-name" placeholder="我的 iFlow" value="iFlow" autocomplete="off">
           </div>
           <div class="form-group">
             <label for="iflow-path">iFlow CLI 路径（可选）</label>
-            <input type="text" id="iflow-path" placeholder="iflow（使用系统 PATH）">
+            <input type="text" id="iflow-path" placeholder="iflow（使用系统 PATH）" autocomplete="off">
           </div>
           <div class="form-group">
             <label for="workspace-path">工作目录</label>
             <div class="workspace-path-row">
-              <input type="text" id="workspace-path" placeholder="/path/to/workspace" value="/Users/chenweilong/playground">
+              <input type="text" id="workspace-path" placeholder="/path/to/workspace" value="/Users/chenweilong/playground" autocomplete="off">
               <button id="browse-workspace-path" class="btn-secondary btn-compact" type="button">选择文件夹</button>
             </div>
           </div>
@@ -168,16 +185,16 @@
     </div>
 
     <!-- 编辑 Agent 名称弹窗 -->
-    <div id="rename-agent-modal" class="modal hidden">
+    <div id="rename-agent-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="rename-agent-modal-title">
       <div class="modal-content">
         <div class="modal-header">
-          <h3>编辑 Agent 名称</h3>
-          <button id="close-rename-agent-modal" class="btn-icon">×</button>
+          <h3 id="rename-agent-modal-title">编辑 Agent 名称</h3>
+          <button id="close-rename-agent-modal" class="btn-icon" aria-label="关闭重命名弹窗">×</button>
         </div>
         <div class="modal-body">
           <div class="form-group">
             <label for="rename-agent-name">Agent 名称</label>
-            <input type="text" id="rename-agent-name" placeholder="请输入 Agent 名称">
+            <input type="text" id="rename-agent-name" placeholder="请输入 Agent 名称" autocomplete="off">
           </div>
         </div>
         <div class="modal-footer">
@@ -188,10 +205,10 @@
     </div>
 
     <!-- 设置弹窗 -->
-    <div id="settings-modal" class="modal hidden">
+    <div id="settings-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
       <div class="modal-content settings-modal-content">
         <div class="modal-header">
-          <h3>设置</h3>
+          <h3 id="settings-modal-title">设置</h3>
           <button id="close-settings-modal" class="btn-icon" aria-label="关闭设置">×</button>
         </div>
         <div class="modal-body settings-modal-body">
@@ -276,11 +293,11 @@
     </div>
 
     <!-- HTML Artifact 预览弹窗 -->
-    <div id="artifact-preview-modal" class="modal hidden">
+    <div id="artifact-preview-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="artifact-preview-modal-title">
       <div class="modal-content artifact-preview-modal-content">
         <div class="modal-header">
-          <h3>HTML 预览</h3>
-          <button id="close-artifact-preview" class="btn-icon">×</button>
+          <h3 id="artifact-preview-modal-title">HTML 预览</h3>
+          <button id="close-artifact-preview" class="btn-icon" aria-label="关闭预览">×</button>
         </div>
         <div class="modal-body artifact-preview-meta">
           <div id="artifact-preview-path"></div>
@@ -290,20 +307,38 @@
             id="artifact-preview-frame"
             class="artifact-preview-frame"
             sandbox="allow-scripts allow-same-origin"
+            title="HTML 预览内容"
           ></iframe>
         </div>
       </div>
     </div>
 
     <!-- Git Diff 预览弹窗 -->
-    <div id="git-diff-modal" class="modal hidden">
+    <div id="git-diff-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="git-diff-modal-title">
       <div class="modal-content git-diff-modal-content">
         <div class="modal-header">
-          <h3 class="git-diff-title">文件 <span id="git-diff-path"></span> Diff</h3>
+          <h3 id="git-diff-modal-title" class="git-diff-title">文件 <span id="git-diff-path"></span> Diff</h3>
           <button id="close-git-diff" class="btn-icon" aria-label="关闭 Diff 预览">×</button>
         </div>
         <div class="git-diff-body">
           <pre id="git-diff-content" class="git-diff-content" role="region" aria-label="文件 Diff 内容"></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- 确认弹窗 -->
+    <div id="confirm-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
+      <div class="modal-content confirm-modal-content">
+        <div class="modal-header">
+          <h3 id="confirm-modal-title">确认操作</h3>
+          <button id="close-confirm-modal" class="btn-icon" aria-label="关闭确认弹窗">×</button>
+        </div>
+        <div class="modal-body">
+          <p id="confirm-message"></p>
+        </div>
+        <div class="modal-footer">
+          <button id="confirm-cancel" class="btn-secondary">取消</button>
+          <button id="confirm-ok" class="btn-primary">确认</button>
         </div>
       </div>
     </div>

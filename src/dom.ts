@@ -41,6 +41,8 @@ export const refreshGitChangesBtnEl = document.getElementById('refresh-git-chang
 export const closeGitChangesPanelBtnEl = document.getElementById('close-git-panel') as HTMLButtonElement;
 export const newSessionBtnEl = document.getElementById('new-session-btn') as HTMLButtonElement;
 export const clearChatBtnEl = document.getElementById('clear-chat-btn') as HTMLButtonElement;
+export const toolbarMoreBtnEl = document.getElementById('toolbar-more-btn') as HTMLButtonElement;
+export const toolbarMoreMenuEl = document.getElementById('toolbar-more-menu') as HTMLDivElement;
 export const connectionStatusEl = document.getElementById('connection-status') as HTMLDivElement;
 export const clearAllSessionsBtnEl = document.getElementById('clear-all-sessions') as HTMLButtonElement;
 export const inputStatusHintEl = document.getElementById('input-status-hint') as HTMLSpanElement;
@@ -79,3 +81,122 @@ export const notificationSoundUploadInputEl = document.getElementById(
   'notification-sound-upload-input'
 ) as HTMLInputElement;
 export const appVersionEl = document.getElementById('app-version') as HTMLDivElement;
+
+// Confirm modal
+export const confirmModalEl = document.getElementById('confirm-modal') as HTMLDivElement;
+export const confirmTitleEl = document.getElementById('confirm-modal-title') as HTMLHeadingElement;
+export const confirmMessageEl = document.getElementById('confirm-message') as HTMLParagraphElement;
+export const closeConfirmModalBtnEl = document.getElementById('close-confirm-modal') as HTMLButtonElement;
+export const confirmCancelBtnEl = document.getElementById('confirm-cancel') as HTMLButtonElement;
+export const confirmOkBtnEl = document.getElementById('confirm-ok') as HTMLButtonElement;
+
+// ── Confirm dialog ────────────────────────────────────────────────────────
+
+let confirmResolve: ((result: boolean) => void) | null = null;
+let isConfirmDialogOpen = false;
+let confirmQueue: Array<{ title: string; message: string; resolve: (result: boolean) => void }> = [];
+
+// ── Focus trap management ──────────────────────────────────────────────────
+
+let lastFocusedElement: HTMLElement | null = null;
+
+export function trapFocusInModal(modalEl: HTMLElement) {
+  // 保存当前焦点元素
+  lastFocusedElement = document.activeElement as HTMLElement;
+
+  // 查找第一个可聚焦元素
+  const focusableSelectors = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+  const focusableElements = modalEl.querySelectorAll<HTMLElement>(focusableSelectors);
+  const firstFocusable = focusableElements[0];
+  const lastFocusable = focusableElements[focusableElements.length - 1];
+
+  // 移动焦点到第一个元素
+  if (firstFocusable) {
+    firstFocusable.focus();
+  }
+
+  // 焦点陷阱
+  function trapFocus(e: KeyboardEvent) {
+    if (e.key !== 'Tab') return;
+
+    if (e.shiftKey) {
+      // Shift + Tab
+      if (document.activeElement === firstFocusable) {
+        e.preventDefault();
+        lastFocusable?.focus();
+      }
+    } else {
+      // Tab
+      if (document.activeElement === lastFocusable) {
+        e.preventDefault();
+        firstFocusable?.focus();
+      }
+    }
+  }
+
+  modalEl.addEventListener('keydown', trapFocus);
+
+  // 返回清理函数
+  return () => {
+    modalEl.removeEventListener('keydown', trapFocus);
+    // 恢复焦点
+    lastFocusedElement?.focus();
+  };
+}
+
+export function showConfirmDialog(title: string, message: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    // 如果弹窗已打开，将请求加入队列
+    if (isConfirmDialogOpen) {
+      confirmQueue.push({ title, message, resolve });
+      return;
+    }
+    
+    isConfirmDialogOpen = true;
+    confirmTitleEl.textContent = title;
+    confirmMessageEl.textContent = message;
+    confirmModalEl.classList.remove('hidden');
+    confirmResolve = resolve;
+    
+    // 焦点陷阱
+    const cleanup = trapFocusInModal(confirmModalEl);
+    confirmModalEl.dataset.focusCleanup = 'true';
+    (confirmModalEl as any)._focusCleanup = cleanup;
+  });
+}
+
+function closeConfirmDialog(result: boolean) {
+  confirmModalEl.classList.add('hidden');
+  
+  // 清理焦点陷阱
+  const cleanup = (confirmModalEl as any)._focusCleanup;
+  if (cleanup) {
+    cleanup();
+    delete (confirmModalEl as any)._focusCleanup;
+  }
+  
+  if (confirmResolve) {
+    confirmResolve(result);
+    confirmResolve = null;
+  }
+  
+  isConfirmDialogOpen = false;
+  
+  // 处理队列中的下一个请求
+  const next = confirmQueue.shift();
+  if (next) {
+    // 使用 setTimeout 确保 DOM 状态稳定后再打开下一个弹窗
+    setTimeout(() => {
+      void showConfirmDialog(next.title, next.message).then(next.resolve);
+    }, 0);
+  }
+}
+
+closeConfirmModalBtnEl.addEventListener('click', () => closeConfirmDialog(false));
+confirmCancelBtnEl.addEventListener('click', () => closeConfirmDialog(false));
+confirmOkBtnEl.addEventListener('click', () => closeConfirmDialog(true));
+confirmModalEl.addEventListener('click', (e) => {
+  if (e.target === confirmModalEl) {
+    closeConfirmDialog(false);
+  }
+});

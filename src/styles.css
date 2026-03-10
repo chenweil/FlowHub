@@ -42,8 +42,58 @@ body {
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 12px;
+  /* Quick reply button colors */
+  --quick-reply-primary: #9ecbff;
+  --quick-reply-primary-hover: #c5e0ff;
+  --quick-reply-secondary: #c8d1da;
+  /* Artifact button colors */
+  --artifact-btn-color: #8dd89b;
+  --artifact-btn-hover: #c5f5cf;
+  /* Model tag colors */
+  --model-tag-color: #7ee787;
+  /* Think toggle button colors */
+  --think-active-color: #3fb950;
+  --think-active-border: rgba(63, 185, 80, 0.5);
+  --think-active-bg: rgba(63, 185, 80, 0.14);
+  /* Git status colors */
+  --git-status-modified: #d29922;
+  --git-status-modified-border: rgba(210, 153, 34, 0.5);
+  --git-status-modified-bg: rgba(210, 153, 34, 0.14);
+  --git-status-added: #3fb950;
+  --git-status-added-border: rgba(63, 185, 80, 0.5);
+  --git-status-added-bg: rgba(63, 185, 80, 0.14);
+  --git-status-deleted: #f85149;
+  --git-status-deleted-border: rgba(248, 81, 73, 0.5);
+  --git-status-deleted-bg: rgba(248, 81, 73, 0.14);
+  --git-status-renamed: #79c0ff;
+  --git-status-renamed-border: rgba(121, 192, 255, 0.5);
+  --git-status-renamed-bg: rgba(121, 192, 255, 0.14);
+  --git-status-unknown: #c297ff;
+  --git-status-unknown-border: rgba(194, 151, 255, 0.5);
+  --git-status-unknown-bg: rgba(194, 151, 255, 0.14);
+  /* Diff colors */
+  --diff-add-color: #3fb950;
+  --diff-add-bg: rgba(63, 185, 80, 0.16);
+  --diff-del-color: #f85149;
+  --diff-del-bg: rgba(248, 81, 73, 0.16);
+  --diff-hunk-color: #79c0ff;
+  --diff-hunk-bg: rgba(121, 192, 255, 0.12);
+  --diff-meta-color: #8b949e;
+  --diff-section-color: #d2a8ff;
+  /* Prism.js token colors */
+  --token-deleted: #f85149;
+  --token-inserted: #7ee787;
+  --token-operator: #79c0ff;
+  --token-keyword: #ff7b72;
+  --token-function: #d2a8ff;
+  --token-variable: #ffa657;
+  /* Slash badge colors */
+  --badge-mcp: #c297ff;
+  --badge-builtin: #79c0ff;
+  --badge-recent: #7ee787;
 }
 
+/* 亮色主题变量定义 - 以下两个选择器共享相同的变量值 */
 @media (prefers-color-scheme: light) {
   :root:not(.theme-dark) {
     --bg-primary: #ffffff;
@@ -67,6 +117,49 @@ body {
     --link-color: #0969da;
     --link-hover: #0550ae;
     --modal-overlay: rgba(31, 35, 40, 0.5);
+    --quick-reply-primary: #0550ae;
+    --quick-reply-primary-hover: #0969da;
+    --quick-reply-secondary: #57606a;
+    --artifact-btn-color: #1a7f37;
+    --artifact-btn-hover: #2da44e;
+    --model-tag-color: #1a7f37;
+    --think-active-color: #1a7f37;
+    --think-active-border: rgba(26, 127, 55, 0.5);
+    --think-active-bg: rgba(26, 127, 55, 0.14);
+    --git-status-modified: #9a6700;
+    --git-status-modified-border: rgba(154, 103, 0, 0.5);
+    --git-status-modified-bg: rgba(154, 103, 0, 0.14);
+    --git-status-added: #1a7f37;
+    --git-status-added-border: rgba(26, 127, 55, 0.5);
+    --git-status-added-bg: rgba(26, 127, 55, 0.14);
+    --git-status-deleted: #cf222e;
+    --git-status-deleted-border: rgba(207, 34, 46, 0.5);
+    --git-status-deleted-bg: rgba(207, 34, 46, 0.14);
+    --git-status-renamed: #0550ae;
+    --git-status-renamed-border: rgba(5, 80, 174, 0.5);
+    --git-status-renamed-bg: rgba(5, 80, 174, 0.16);
+    --git-status-unknown: #8250df;
+    --git-status-unknown-border: rgba(130, 80, 223, 0.5);
+    --git-status-unknown-bg: rgba(130, 80, 223, 0.16);
+    --diff-add-color: #1a7f37;
+    --diff-add-bg: rgba(26, 127, 55, 0.18);
+    --diff-del-color: #cf222e;
+    --diff-del-bg: rgba(207, 34, 46, 0.16);
+    --diff-hunk-color: #0550ae;
+    --diff-hunk-bg: rgba(5, 80, 174, 0.12);
+    --diff-meta-color: #636c76;
+    --diff-section-color: #8250df;
+    /* Prism.js token colors - 亮色主题适配 */
+    --token-deleted: #cf222e;
+    --token-inserted: #116329;
+    --token-operator: #0550ae;
+    --token-keyword: #cf222e;
+    --token-function: #8250df;
+    --token-variable: #953800;
+    /* Slash badge colors - 亮色主题适配 */
+    --badge-mcp: #8250df;
+    --badge-builtin: #0550ae;
+    --badge-recent: #116329;
   }
 
   :root:not(.theme-dark) .model-selector-menu,
@@ -75,7 +168,7 @@ body {
   }
 }
 
-/* 强制亮色模式 */
+/* 强制亮色模式 - 变量值与上面媒体查询中的亮色主题完全相同 */
 :root.theme-light {
   --bg-primary: #ffffff;
   --bg-secondary: #f6f8fa;
@@ -98,6 +191,49 @@ body {
   --link-color: #0969da;
   --link-hover: #0550ae;
   --modal-overlay: rgba(31, 35, 40, 0.5);
+  --quick-reply-primary: #0550ae;
+  --quick-reply-primary-hover: #0969da;
+  --quick-reply-secondary: #57606a;
+  --artifact-btn-color: #1a7f37;
+  --artifact-btn-hover: #2da44e;
+  --model-tag-color: #1a7f37;
+  --think-active-color: #1a7f37;
+  --think-active-border: rgba(26, 127, 55, 0.5);
+  --think-active-bg: rgba(26, 127, 55, 0.14);
+  --git-status-modified: #9a6700;
+  --git-status-modified-border: rgba(154, 103, 0, 0.5);
+  --git-status-modified-bg: rgba(154, 103, 0, 0.14);
+  --git-status-added: #1a7f37;
+  --git-status-added-border: rgba(26, 127, 55, 0.5);
+  --git-status-added-bg: rgba(26, 127, 55, 0.14);
+  --git-status-deleted: #cf222e;
+  --git-status-deleted-border: rgba(207, 34, 46, 0.5);
+  --git-status-deleted-bg: rgba(207, 34, 46, 0.14);
+  --git-status-renamed: #0550ae;
+  --git-status-renamed-border: rgba(5, 80, 174, 0.5);
+  --git-status-renamed-bg: rgba(5, 80, 174, 0.16);
+  --git-status-unknown: #8250df;
+  --git-status-unknown-border: rgba(130, 80, 223, 0.5);
+  --git-status-unknown-bg: rgba(130, 80, 223, 0.16);
+  --diff-add-color: #1a7f37;
+  --diff-add-bg: rgba(26, 127, 55, 0.18);
+  --diff-del-color: #cf222e;
+  --diff-del-bg: rgba(207, 34, 46, 0.16);
+  --diff-hunk-color: #0550ae;
+  --diff-hunk-bg: rgba(5, 80, 174, 0.12);
+  --diff-meta-color: #636c76;
+  --diff-section-color: #8250df;
+  /* Prism.js token colors - 亮色主题适配 */
+  --token-deleted: #cf222e;
+  --token-inserted: #116329;
+  --token-operator: #0550ae;
+  --token-keyword: #cf222e;
+  --token-function: #8250df;
+  --token-variable: #953800;
+  /* Slash badge colors - 亮色主题适配 */
+  --badge-mcp: #8250df;
+  --badge-builtin: #0550ae;
+  --badge-recent: #116329;
 }
 
 :root.theme-light .model-selector-menu,
@@ -160,7 +296,7 @@ body {
   margin-bottom: 8px;
   border-radius: var(--radius-md);
   cursor: pointer;
-  transition: all 0.2s;
+  transition: background-color 0.2s, border-color 0.2s;
   border: 1px solid transparent;
 }
 
@@ -249,7 +385,7 @@ body {
   align-items: center;
   justify-content: center;
   opacity: 0.8;
-  transition: all 0.2s;
+  transition: background-color 0.2s, color 0.2s, opacity 0.2s;
   padding: 0;
   margin-left: 4px;
   pointer-events: auto;
@@ -276,7 +412,7 @@ body {
   align-items: center;
   justify-content: center;
   opacity: 0.8;
-  transition: all 0.2s;
+  transition: background-color 0.2s, color 0.2s, opacity 0.2s;
   padding: 0;
   margin-left: 4px;
   pointer-events: auto;
@@ -308,7 +444,7 @@ body {
   align-items: center;
   justify-content: center;
   opacity: 0.8;
-  transition: all 0.2s;
+  transition: background-color 0.2s, color 0.2s, opacity 0.2s;
   padding: 0;
   margin-left: 4px;
   pointer-events: auto;
@@ -387,7 +523,7 @@ body {
   background: var(--bg-tertiary);
   padding: 8px 10px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: background-color 0.2s, border-color 0.2s;
 }
 
 .session-item:hover {
@@ -526,6 +662,75 @@ body {
   gap: 8px;
   flex-wrap: wrap;
   justify-content: flex-end;
+  align-items: center;
+}
+
+.toolbar-more-wrapper {
+  position: relative;
+}
+
+.toolbar-more-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 160px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 1000;
+  padding: 4px 0;
+}
+
+.toolbar-more-menu.hidden {
+  display: none;
+}
+
+.toolbar-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.toolbar-menu-item:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+}
+
+.toolbar-menu-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.toolbar-menu-item-danger {
+  color: var(--error-color);
+}
+
+.toolbar-menu-item-danger:hover:not(:disabled) {
+  background: rgba(248, 81, 73, 0.1);
+}
+
+.toolbar-menu-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.toolbar-menu-text {
+  flex: 1;
+}
+
+.toolbar-menu-divider {
+  height: 1px;
+  background: var(--border-color);
+  margin: 4px 0;
 }
 
 .notification-controls {
@@ -659,7 +864,7 @@ body {
   color: var(--text-secondary);
   font-size: 12px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: background-color 0.2s, border-color 0.2s, color 0.2s;
 }
 
 .model-selector-btn:hover:not(:disabled) {
@@ -739,7 +944,7 @@ body {
 .model-option-tag {
   flex-shrink: 0;
   font-size: 10px;
-  color: #7ee787;
+  color: var(--model-tag-color);
 }
 
 .model-selector-state {
@@ -758,7 +963,7 @@ body {
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: background-color 0.2s;
 }
 
 .btn-primary:hover {
@@ -773,7 +978,7 @@ body {
   border-radius: var(--radius-md);
   font-size: 14px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: background-color 0.2s, border-color 0.2s;
 }
 
 .btn-secondary:hover {
@@ -786,9 +991,9 @@ body {
 }
 
 .think-toggle-btn.active {
-  color: #3fb950;
-  border-color: rgba(63, 185, 80, 0.5);
-  background: rgba(63, 185, 80, 0.14);
+  color: var(--think-active-color);
+  border-color: var(--think-active-border);
+  background: var(--think-active-bg);
 }
 
 .think-toggle-btn {
@@ -848,7 +1053,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.2s;
+  transition: background-color 0.2s;
 }
 
 .btn-send:hover:not(:disabled) {
@@ -1057,6 +1262,149 @@ body {
   line-height: 1.5;
 }
 
+/* Code block wrapper and copy button */
+.markdown-content .md-code-block-wrapper {
+  position: relative;
+  margin: 12px 0;
+}
+
+.markdown-content .md-code-block-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--bg-code);
+  border: 1px solid var(--border-color);
+  border-bottom: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  padding: 6px 12px;
+}
+
+.markdown-content .md-code-block-wrapper .md-code-block {
+  margin: 0;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+}
+
+.markdown-content .md-code-lang {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.markdown-content .md-code-copy-btn {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background-color 0.2s, border-color 0.2s, color 0.2s;
+}
+
+.markdown-content .md-code-copy-btn:hover {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+  color: white;
+}
+
+.markdown-content .md-code-copy-btn.copied {
+  background: var(--success-color);
+  border-color: var(--success-color);
+  color: white;
+}
+
+/* Date separator */
+.date-separator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 16px 0;
+}
+
+.date-separator span {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: 999px;
+}
+
+/* Prism.js syntax highlighting - custom dark theme */
+.markdown-content .md-code-block code[class*="language-"],
+.markdown-content .md-code-block pre[class*="language-"] {
+  color: var(--text-primary);
+  background: transparent;
+  text-shadow: none;
+  font-family: 'Fira Code', 'Consolas', 'Monaco', 'Andale Mono', 'Ubuntu Mono', monospace;
+  font-size: 13px;
+  text-align: left;
+  white-space: pre;
+  word-spacing: normal;
+  word-break: normal;
+  word-wrap: normal;
+  line-height: 1.6;
+  tab-size: 2;
+  hyphens: none;
+}
+
+/* Token colors */
+.markdown-content .token.comment,
+.markdown-content .token.prolog,
+.markdown-content .token.doctype,
+.markdown-content .token.cdata {
+  color: var(--text-muted);
+}
+
+.markdown-content .token.punctuation {
+  color: var(--text-secondary);
+}
+
+.markdown-content .token.property,
+.markdown-content .token.tag,
+.markdown-content .token.boolean,
+.markdown-content .token.number,
+.markdown-content .token.constant,
+.markdown-content .token.symbol,
+.markdown-content .token.deleted {
+  color: var(--token-deleted);
+}
+
+.markdown-content .token.selector,
+.markdown-content .token.attr-name,
+.markdown-content .token.string,
+.markdown-content .token.char,
+.markdown-content .token.builtin,
+.markdown-content .token.inserted {
+  color: var(--token-inserted);
+}
+
+.markdown-content .token.operator,
+.markdown-content .token.entity,
+.markdown-content .token.url,
+.markdown-content .language-css .token.string,
+.markdown-content .style .token.string {
+  color: var(--token-operator);
+}
+
+.markdown-content .token.atrule,
+.markdown-content .token.attr-value,
+.markdown-content .token.keyword {
+  color: var(--token-keyword);
+}
+
+.markdown-content .token.function,
+.markdown-content .token.class-name {
+  color: var(--token-function);
+}
+
+.markdown-content .token.regex,
+.markdown-content .token.important,
+.markdown-content .token.variable {
+  color: var(--token-variable);
+}
+
 .markdown-content blockquote {
   margin: 0;
   border-left: 3px solid rgba(47, 129, 247, 0.5);
@@ -1164,25 +1512,25 @@ body {
 .assistant-quick-reply-btn {
   border: 1px solid rgba(47, 129, 247, 0.45);
   background: rgba(47, 129, 247, 0.12);
-  color: #9ecbff;
+  color: var(--quick-reply-primary);
   border-radius: 999px;
   padding: 2px 10px;
   font-size: 12px;
   line-height: 1.6;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: background-color 0.2s, border-color 0.2s, color 0.2s;
 }
 
 .assistant-quick-reply-btn:hover:not(:disabled) {
   background: rgba(47, 129, 247, 0.24);
   border-color: var(--accent-color);
-  color: #c5e0ff;
+  color: var(--quick-reply-primary-hover);
 }
 
 .assistant-quick-reply-btn.secondary {
   border-color: rgba(139, 148, 158, 0.5);
   background: rgba(139, 148, 158, 0.12);
-  color: #c8d1da;
+  color: var(--quick-reply-secondary);
 }
 
 .assistant-quick-reply-btn.secondary:hover:not(:disabled) {
@@ -1206,19 +1554,19 @@ body {
 .artifact-preview-btn {
   border: 1px solid rgba(35, 134, 54, 0.45);
   background: rgba(35, 134, 54, 0.12);
-  color: #8dd89b;
+  color: var(--artifact-btn-color);
   border-radius: 999px;
   padding: 2px 10px;
   font-size: 12px;
   line-height: 1.6;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: background-color 0.2s, border-color 0.2s, color 0.2s;
 }
 
 .artifact-preview-btn:hover {
   background: rgba(35, 134, 54, 0.24);
   border-color: rgba(35, 134, 54, 0.75);
-  color: #c5f5cf;
+  color: var(--artifact-btn-hover);
 }
 
 .thinking-indicator {
@@ -1440,36 +1788,36 @@ body {
 }
 
 .git-status-chip.modified {
-  color: #d29922;
-  border-color: rgba(210, 153, 34, 0.5);
-  background: rgba(210, 153, 34, 0.14);
+  color: var(--git-status-modified);
+  border-color: var(--git-status-modified-border);
+  background: var(--git-status-modified-bg);
 }
 
 .git-status-chip.added,
 .git-status-chip.untracked {
-  color: #3fb950;
-  border-color: rgba(63, 185, 80, 0.5);
-  background: rgba(63, 185, 80, 0.14);
+  color: var(--git-status-added);
+  border-color: var(--git-status-added-border);
+  background: var(--git-status-added-bg);
 }
 
 .git-status-chip.deleted {
-  color: #f85149;
-  border-color: rgba(248, 81, 73, 0.5);
-  background: rgba(248, 81, 73, 0.14);
+  color: var(--git-status-deleted);
+  border-color: var(--git-status-deleted-border);
+  background: var(--git-status-deleted-bg);
 }
 
 .git-status-chip.renamed,
 .git-status-chip.copied {
-  color: #79c0ff;
-  border-color: rgba(121, 192, 255, 0.5);
-  background: rgba(121, 192, 255, 0.16);
+  color: var(--git-status-renamed);
+  border-color: var(--git-status-renamed-border);
+  background: var(--git-status-renamed-bg);
 }
 
 .git-status-chip.unmerged,
 .git-status-chip.unknown {
-  color: #c297ff;
-  border-color: rgba(194, 151, 255, 0.5);
-  background: rgba(194, 151, 255, 0.16);
+  color: var(--git-status-unknown);
+  border-color: var(--git-status-unknown-border);
+  background: var(--git-status-unknown-bg);
 }
 
 .modal-content.git-diff-modal-content {
@@ -1524,26 +1872,26 @@ body {
 }
 
 .git-diff-content .diff-line-add {
-  color: #3fb950;
-  background: rgba(35, 134, 54, 0.18);
+  color: var(--diff-add-color);
+  background: var(--diff-add-bg);
 }
 
 .git-diff-content .diff-line-del {
-  color: #f85149;
-  background: rgba(248, 81, 73, 0.16);
+  color: var(--diff-del-color);
+  background: var(--diff-del-bg);
 }
 
 .git-diff-content .diff-line-hunk {
-  color: #79c0ff;
-  background: rgba(56, 139, 253, 0.12);
+  color: var(--diff-hunk-color);
+  background: var(--diff-hunk-bg);
 }
 
 .git-diff-content .diff-line-meta {
-  color: #8b949e;
+  color: var(--diff-meta-color);
 }
 
 .git-diff-content .diff-line-section {
-  color: #d2a8ff;
+  color: var(--diff-section-color);
   font-weight: 600;
 }
 
@@ -1664,6 +2012,40 @@ body {
   font-family: 'Monaco', 'Consolas', monospace;
   font-size: 12px;
   line-height: 1.3;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.slash-command-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  font-size: 9px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-weight: 500;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+
+.slash-command-badge.mcp {
+  background: rgba(163, 113, 247, 0.2);
+  color: var(--badge-mcp);
+  border: 1px solid rgba(163, 113, 247, 0.3);
+}
+
+.slash-command-badge.builtin {
+  background: rgba(47, 129, 247, 0.2);
+  color: var(--badge-builtin);
+  border: 1px solid rgba(47, 129, 247, 0.3);
+}
+
+.slash-command-badge.recent {
+  background: rgba(63, 185, 80, 0.2);
+  color: var(--badge-recent);
+  border: 1px solid rgba(63, 185, 80, 0.3);
 }
 
 .slash-command-desc {
@@ -1799,6 +2181,20 @@ body {
 
 .settings-modal-content {
   width: min(620px, 92vw);
+}
+
+.confirm-modal-content {
+  width: min(420px, 92vw);
+}
+
+.confirm-modal-content .modal-body {
+  padding: 20px;
+}
+
+.confirm-modal-content .modal-body p {
+  margin: 0;
+  color: var(--text-primary);
+  line-height: 1.6;
 }
 
 .settings-modal-body {
@@ -1971,5 +2367,47 @@ body {
 
   .chat-messages {
     padding: 12px 16px;
+  }
+}
+
+/* 减少动画偏好支持 */
+@media (prefers-reduced-motion: reduce) {
+  /* 禁用 thinking dots 动画 */
+  .thinking-indicator::after {
+    animation: none;
+    content: '...';
+  }
+
+  /* 禁用 loading 旋转动画 */
+  .loading {
+    animation: none;
+    border: 2px solid var(--border-color);
+  }
+
+  /* 禁用弹窗过渡动画 */
+  .modal {
+    transition: none;
+  }
+
+  .modal-content {
+    transition: none;
+  }
+
+  /* 禁用面板过渡 */
+  .tool-calls-panel,
+  .git-changes-panel {
+    transition: none;
+  }
+
+  /* 禁用按钮过渡 */
+  .btn-primary,
+  .btn-secondary,
+  .btn-send,
+  .agent-item,
+  .session-item,
+  .model-selector-btn,
+  .assistant-quick-reply-btn,
+  .artifact-preview-btn {
+    transition: none;
   }
 }

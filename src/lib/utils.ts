@@ -50,3 +50,28 @@ export function formatSessionMeta(updatedAt: Date, messageCount: number): string
   });
   return `${messageCount} 条消息 · ${timeText}`;
 }
+
+export function formatDateSeparator(date: Date): string {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+
+  const messageDate = new Date(date);
+  messageDate.setHours(0, 0, 0, 0);
+
+  if (messageDate.getTime() === today.getTime()) {
+    return '今天';
+  }
+
+  if (messageDate.getTime() === yesterday.getTime()) {
+    return '昨天';
+  }
+
+  return date.toLocaleDateString('zh-CN', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+}

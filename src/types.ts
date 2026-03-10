@@ -112,11 +112,13 @@ export interface StoredMessage {
 
 export type StoredSessionMap = Record<string, StoredSession[]>;
 export type StoredMessageMap = Record<string, StoredMessage[]>;
+export type StoredDraftMap = Record<string, string>;
 export type LegacyMessageHistoryMap = Record<string, StoredMessage[]>;
 
 export interface StorageSnapshot {
   sessionsByAgent: StoredSessionMap;
   messagesBySession: StoredMessageMap;
+  draftsBySession?: StoredDraftMap;
 }
 
 export interface IflowHistorySessionRecord {

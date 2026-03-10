@@ -1,5 +1,22 @@
 // src/lib/markdown.ts
 import { escapeHtml, sanitizeMarkdownUrl } from './html';
+import Prism from 'prismjs';
+import 'prismjs/components/prism-javascript';
+import 'prismjs/components/prism-typescript';
+import 'prismjs/components/prism-jsx';
+import 'prismjs/components/prism-tsx';
+import 'prismjs/components/prism-css';
+import 'prismjs/components/prism-python';
+import 'prismjs/components/prism-bash';
+import 'prismjs/components/prism-json';
+import 'prismjs/components/prism-markdown';
+import 'prismjs/components/prism-yaml';
+import 'prismjs/components/prism-rust';
+import 'prismjs/components/prism-go';
+import 'prismjs/components/prism-java';
+import 'prismjs/components/prism-c';
+import 'prismjs/components/prism-cpp';
+import 'prismjs/components/prism-sql';
 
 export const MARKDOWN_CODE_BLOCK_PLACEHOLDER_PREFIX = '@@MD_CODE_BLOCK_';
 export const MARKDOWN_CODE_SPAN_PLACEHOLDER_PREFIX = '@@MD_CODE_SPAN_';
@@ -145,12 +162,21 @@ export function collectMarkdownTableBodyRows(
 export function renderMarkdownContent(text: string): string {
   const codeBlockTokens: string[] = [];
   const withPlaceholders = text.replace(/```([^\n`]*)\n?([\s\S]*?)```/g, (_match, lang, code) => {
-    const language = escapeHtml(String(lang || '').trim().split(/\s+/)[0]);
-    const escapedCode = escapeHtml(String(code || '').replace(/\n$/, ''));
-    const languageClass = language ? ` class="language-${language}"` : '';
+    const language = String(lang || '').trim().split(/\s+/)[0];
+    const codeContent = String(code || '').replace(/\n$/, '');
+    
+    let highlightedCode: string;
+    if (language && Prism.languages[language]) {
+      highlightedCode = Prism.highlight(codeContent, Prism.languages[language], language);
+    } else {
+      highlightedCode = escapeHtml(codeContent);
+    }
+    
+    const languageLabel = language ? `<span class="md-code-lang">${escapeHtml(language)}</span>` : '';
+    const languageClass = language ? ` class="language-${escapeHtml(language)}"` : '';
     const tokenIndex =
       codeBlockTokens.push(
-        `<pre class="md-code-block"><code${languageClass}>${escapedCode}</code></pre>`
+        `<div class="md-code-block-wrapper"><div class="md-code-block-header">${languageLabel}<button class="md-code-copy-btn" data-code="${encodeURIComponent(codeContent)}" title="复制代码">复制</button></div><pre class="md-code-block"><code${languageClass}>${highlightedCode}</code></pre></div>`
       ) - 1;
     return `\n${MARKDOWN_CODE_BLOCK_PLACEHOLDER_PREFIX}${tokenIndex}@@\n`;
   });

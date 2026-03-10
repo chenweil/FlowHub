@@ -4,13 +4,14 @@ import {
   saveStorageSnapshot as tauriSaveStorageSnapshot,
 } from '../../services/tauri';
 import { generateAcpSessionId, normalizeStoredRole } from '../../lib/utils';
-import type { Session, Message, StoredSession, StoredMessage, StoredSessionMap, StoredMessageMap, LegacyMessageHistoryMap, StorageSnapshot } from '../../types';
+import type { Session, Message, StoredSession, StoredMessage, StoredSessionMap, StoredMessageMap, StoredDraftMap, LegacyMessageHistoryMap, StorageSnapshot } from '../../types';
 import { state } from '../../store';
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 export const AGENTS_STORAGE_KEY = 'iflow-agents';
 export const SESSIONS_STORAGE_KEY = 'iflow-sessions';
 export const SESSION_MESSAGES_STORAGE_KEY = 'iflow-session-messages';
+export const SESSION_DRAFTS_STORAGE_KEY = 'iflow-session-drafts';
 export const LEGACY_MESSAGE_HISTORY_STORAGE_KEY = 'iflow-message-history';
 
 // ── Session identity utilities ────────────────────────────────────────────────
@@ -163,6 +164,7 @@ export function buildStorageSnapshot(): StorageSnapshot {
   return {
     sessionsByAgent: buildStoredSessionMap(),
     messagesBySession: buildStoredMessageMap(),
+    draftsBySession: { ...state.draftsBySession },
   };
 }
 
@@ -225,16 +227,19 @@ export function persistCurrentSessionMessages() {
 export function readStorageSnapshotFromLocalStorage(): StorageSnapshot | null {
   const sessionRaw = localStorage.getItem(SESSIONS_STORAGE_KEY);
   const messageRaw = localStorage.getItem(SESSION_MESSAGES_STORAGE_KEY);
-  if (!sessionRaw && !messageRaw) {
+  const draftRaw = localStorage.getItem(SESSION_DRAFTS_STORAGE_KEY);
+  if (!sessionRaw && !messageRaw && !draftRaw) {
     return null;
   }
 
   try {
     const sessionsByAgent = sessionRaw ? (JSON.parse(sessionRaw) as StoredSessionMap) : {};
     const messagesBySession = messageRaw ? (JSON.parse(messageRaw) as StoredMessageMap) : {};
+    const draftsBySession = draftRaw ? (JSON.parse(draftRaw) as StoredDraftMap) : {};
     return {
       sessionsByAgent,
       messagesBySession,
+      draftsBySession,
     };
   } catch (e) {
     console.error('Failed to load session storage from localStorage:', e);
@@ -245,6 +250,7 @@ export function readStorageSnapshotFromLocalStorage(): StorageSnapshot | null {
 export function clearLocalStorageSessionData() {
   localStorage.removeItem(SESSIONS_STORAGE_KEY);
   localStorage.removeItem(SESSION_MESSAGES_STORAGE_KEY);
+  localStorage.removeItem(SESSION_DRAFTS_STORAGE_KEY);
 }
 
 export async function loadStorageSnapshot(): Promise<StorageSnapshot | null> {
@@ -256,6 +262,7 @@ export async function loadStorageSnapshot(): Promise<StorageSnapshot | null> {
     return {
       sessionsByAgent: snapshot.sessionsByAgent || {},
       messagesBySession: snapshot.messagesBySession || {},
+      draftsBySession: snapshot.draftsBySession || {},
     };
   } catch (e) {
     console.error('Failed to load session storage from backend:', e);
@@ -283,6 +290,11 @@ export async function persistStorageSnapshot(snapshot: StorageSnapshot): Promise
   try {
     localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(snapshot.sessionsByAgent));
     localStorage.setItem(SESSION_MESSAGES_STORAGE_KEY, JSON.stringify(snapshot.messagesBySession));
+    if (snapshot.draftsBySession && Object.keys(snapshot.draftsBySession).length > 0) {
+      localStorage.setItem(SESSION_DRAFTS_STORAGE_KEY, JSON.stringify(snapshot.draftsBySession));
+    } else {
+      localStorage.removeItem(SESSION_DRAFTS_STORAGE_KEY);
+    }
   } catch (e) {
     console.error('Failed to save session storage to localStorage:', e);
   }
@@ -292,7 +304,8 @@ export async function persistStorageSnapshot(snapshot: StorageSnapshot): Promise
 export function isStorageSnapshotEmpty(snapshot: StorageSnapshot): boolean {
   return (
     Object.keys(snapshot.sessionsByAgent).length === 0 &&
-    Object.keys(snapshot.messagesBySession).length === 0
+    Object.keys(snapshot.messagesBySession).length === 0 &&
+    (!snapshot.draftsBySession || Object.keys(snapshot.draftsBySession).length === 0)
   );
 }
 
@@ -301,12 +314,14 @@ export async function loadSessionStore() {
   if (backendSnapshot) {
     state.sessionsByAgent = normalizeStoredSessions(backendSnapshot.sessionsByAgent);
     state.messagesBySession = normalizeStoredMessages(backendSnapshot.messagesBySession);
+    state.draftsBySession = backendSnapshot.draftsBySession || {};
 
     if (isStorageSnapshotEmpty(backendSnapshot)) {
       const localSnapshot = readStorageSnapshotFromLocalStorage();
       if (localSnapshot) {
         state.sessionsByAgent = normalizeStoredSessions(localSnapshot.sessionsByAgent);
         state.messagesBySession = normalizeStoredMessages(localSnapshot.messagesBySession);
+        state.draftsBySession = localSnapshot.draftsBySession || {};
         await persistStorageSnapshot(localSnapshot);
       }
     }
@@ -317,11 +332,13 @@ export async function loadSessionStore() {
   if (!localSnapshot) {
     state.sessionsByAgent = {};
     state.messagesBySession = {};
+    state.draftsBySession = {};
     return;
   }
 
   state.sessionsByAgent = normalizeStoredSessions(localSnapshot.sessionsByAgent);
   state.messagesBySession = normalizeStoredMessages(localSnapshot.messagesBySession);
+  state.draftsBySession = localSnapshot.draftsBySession || {};
 }
 
 export async function saveSessions() {
@@ -392,4 +409,40 @@ export function pruneSessionDataByAgents() {
     }
   }
   state.messagesBySession = prunedMessages;
+
+  // Also prune drafts
+  const prunedDrafts: Record<string, string> = {};
+  for (const [sessionId, draft] of Object.entries(state.draftsBySession)) {
+    if (liveSessionIds.has(sessionId)) {
+      prunedDrafts[sessionId] = draft;
+    }
+  }
+  state.draftsBySession = prunedDrafts;
+
+  // Also prune scroll positions
+  const prunedScrollPositions: Record<string, number> = {};
+  for (const [sessionId, scrollPos] of Object.entries(state.scrollPositionsBySession)) {
+    if (liveSessionIds.has(sessionId)) {
+      prunedScrollPositions[sessionId] = scrollPos;
+    }
+  }
+  state.scrollPositionsBySession = prunedScrollPositions;
+}
+
+// ── Draft utilities ────────────────────────────────────────────────────────────
+
+export function saveDraft(sessionId: string, content: string) {
+  if (!sessionId || !content.trim()) {
+    delete state.draftsBySession[sessionId];
+  } else {
+    state.draftsBySession[sessionId] = content;
+  }
+}
+
+export function getDraft(sessionId: string): string | undefined {
+  return state.draftsBySession[sessionId];
+}
+
+export function clearDraft(sessionId: string) {
+  delete state.draftsBySession[sessionId];
 }

@@ -8,6 +8,7 @@ import {
 import { escapeHtml } from '../../lib/html';
 import { normalizeTitleSource } from '../../lib/markdown';
 import { formatSessionMeta } from '../../lib/utils';
+import { showConfirmDialog } from '../../dom';
 import type { Agent, Session, Message, IflowHistoryMessageRecord } from '../../types';
 import { state } from '../../store';
 import { sessionListEl } from '../../dom';
@@ -21,6 +22,8 @@ import {
   saveSessionMessages,
 } from '../storage';
 import { showError, showSuccess } from '../agents';
+import { restoreDraftForSession } from '../app';
+import { clearDraft } from '../storage';
 
 // ── Title generation constants ────────────────────────────────────────────────
 
@@ -92,7 +95,13 @@ export function onSessionListClick(event: MouseEvent) {
       return;
     }
     if (action === 'delete-session') {
-      void deleteSession(sessionId);
+      const session = (state.sessionsByAgent[state.currentAgentId || ''] || []).find(s => s.id === sessionId);
+      const sessionName = session?.title || '未命名会话';
+      showConfirmDialog('删除会话', `确定要删除会话 "${sessionName}" 吗？此操作不可撤销。`).then(confirmed => {
+        if (confirmed) {
+          void deleteSession(sessionId);
+        }
+      });
       return;
     }
   }
@@ -112,6 +121,15 @@ export async function clearCurrentAgentSessions() {
   const agent = state.agents.find((item) => item.id === state.currentAgentId);
   if (!agent) {
     showError('当前 Agent 不存在');
+    return;
+  }
+
+  // 添加确认弹窗，防止误操作
+  const confirmed = await showConfirmDialog(
+    '清空会话确认',
+    `确定要清空 Agent "${agent.name}" 的所有会话记录吗？此操作不可撤销。`
+  );
+  if (!confirmed) {
     return;
   }
 
@@ -297,16 +315,27 @@ export function startNewSession() {
   void Promise.all([import('../ui'), import('../app')]).then(([{ renderMessages }, { refreshComposerState }]) => {
     renderMessages();
     refreshComposerState();
-  });}
+    restoreDraftForSession(session.id);
+  });
+}
 
 // 清空当前会话
-export function clearChat() {
+export async function clearChat() {
   if (!state.currentSessionId) {
+    return;
+  }
+
+  const confirmed = await showConfirmDialog(
+    '清空会话',
+    '确定要清空当前会话的所有消息吗？此操作不可撤销。'
+  );
+  if (!confirmed) {
     return;
   }
 
   state.messages = [];
   state.messagesBySession[state.currentSessionId] = [];
+  clearDraft(state.currentSessionId);
   touchCurrentSession();
   void Promise.all([import('../ui'), import('../app')]).then(([{ renderMessages }, { refreshComposerState }]) => {
     renderMessages();
@@ -318,6 +347,16 @@ export function clearChat() {
 export function selectSession(sessionId: string) {
   if (!state.currentAgentId) {
     return;
+  }
+
+  // 保存当前会话的滚动位置
+  // 注意：必须先缓存 prevSessionId，因为 import 是异步的，
+  // 而 state.currentSessionId 会在 .then() 回调执行前被更新
+  const prevSessionId = state.currentSessionId;
+  if (prevSessionId) {
+    void import('../ui').then(({ saveScrollPosition }) => {
+      saveScrollPosition(prevSessionId);
+    });
   }
 
   const session = (state.sessionsByAgent[state.currentAgentId] || []).find((item) => item.id === sessionId);
@@ -340,10 +379,11 @@ export function selectSession(sessionId: string) {
     void loadIflowHistoryMessagesForSession(session);
   }
   renderSessionList();
-  void Promise.all([import('../ui'), import('../app')]).then(([{ renderMessages, scrollToBottom }, { refreshComposerState }]) => {
+  void Promise.all([import('../ui'), import('../app')]).then(([{ renderMessages, restoreScrollPosition }, { refreshComposerState }]) => {
     renderMessages();
-    scrollToBottom();
+    restoreScrollPosition(sessionId);
     refreshComposerState();
+    restoreDraftForSession(sessionId);
   });
 }
 

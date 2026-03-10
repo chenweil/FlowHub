@@ -69,10 +69,15 @@ import {
   notificationSoundUploadBtnEl,
   notificationSoundUploadInputEl,
   appVersionEl,
+  toolbarMoreBtnEl,
+  toolbarMoreMenuEl,
 } from '../dom';
 import {
   saveSessions,
   saveSessionMessages,
+  saveDraft,
+  getDraft,
+  clearDraft,
 } from './storage';
 import {
   applyAcpSessionBinding,
@@ -222,9 +227,9 @@ const AUTO_RECONNECT_MODE_LABELS: Record<AutoReconnectMode, string> = {
 };
 
 function normalizeAutoReconnectMode(rawValue: string | null | undefined): AutoReconnectMode {
-  const normalized = String(rawValue || '').trim().toLowerCase();
+  const normalized = String(rawValue || '').trim().toLowerCase() as AutoReconnectMode | string;
   if (normalized === 'last' || normalized === 'all' || normalized === 'off') {
-    return normalized;
+    return normalized as AutoReconnectMode;
   }
   return AUTO_RECONNECT_MODE_DEFAULT;
 }
@@ -745,10 +750,34 @@ export function updateSlashCommandMenu() {
   }
 
   const candidateItems = buildSlashMenuItemsForCurrentAgent();
-  const filteredItems =
+  let filteredItems =
     query.length === 0
       ? candidateItems
       : candidateItems.filter((item) => item.searchable.includes(query));
+
+  // 按最近使用排序
+  filteredItems = filteredItems.sort((a, b) => {
+    const aIndex = state.recentSlashCommands.indexOf(a.id);
+    const bIndex = state.recentSlashCommands.indexOf(b.id);
+    
+    // 如果都在最近使用列表中，按使用顺序排序（越新的越靠前）
+    if (aIndex !== -1 && bIndex !== -1) {
+      return aIndex - bIndex;
+    }
+    
+    // 如果只有 a 在最近使用列表中，a 排前面
+    if (aIndex !== -1) {
+      return -1;
+    }
+    
+    // 如果只有 b 在最近使用列表中，b 排前面
+    if (bIndex !== -1) {
+      return 1;
+    }
+    
+    // 都不在最近使用列表中，保持原顺序
+    return 0;
+  });
 
   state.slashMenuItems = filteredItems.slice(0, 12);
   if (state.slashMenuItems.length === 0) {
@@ -771,10 +800,27 @@ export function updateSlashCommandMenu() {
     .map((item, index) => {
       const activeClass = index === state.slashMenuActiveIndex ? 'active' : '';
       const desc = escapeHtml(item.description || (item.category === 'mcp' ? 'MCP 服务' : '命令'));
+      
+      // 类别标签
+      let categoryBadge = '';
+      if (item.category === 'mcp') {
+        categoryBadge = '<span class="slash-command-badge mcp">MCP</span>';
+      } else if (item.category === 'builtin') {
+        categoryBadge = '<span class="slash-command-badge builtin">内置</span>';
+      }
+      
+      // 最近使用标记
+      const isRecent = state.recentSlashCommands.includes(item.id);
+      const recentBadge = isRecent ? '<span class="slash-command-badge recent">最近</span>' : '';
+      
       return `
       <button type="button" class="slash-command-item ${activeClass}" data-index="${index}">
         <div class="slash-command-main">
-          <div class="slash-command-name">${escapeHtml(item.label)}</div>
+          <div class="slash-command-name">
+            ${escapeHtml(item.label)}
+            ${categoryBadge}
+            ${recentBadge}
+          </div>
           <div class="slash-command-desc">${desc}</div>
         </div>
         <span class="slash-command-hint">${escapeHtml(item.hint)}</span>
@@ -835,6 +881,9 @@ export function applySlashMenuItem(index: number): boolean {
   if (!item) {
     return false;
   }
+
+  // 记录最近使用的命令
+  recordRecentSlashCommand(item.id);
 
   messageInputEl.value = `${item.insertText} `;
   messageInputEl.style.height = 'auto';
@@ -929,7 +978,24 @@ export function setupEventListeners() {
     }
     showGitChangesForAgent(state.currentAgentId, true);
     void refreshCurrentAgentGitChanges();
+    toolbarMoreMenuEl.classList.add('hidden');
   });
+  
+  // Toolbar more menu
+  toolbarMoreBtnEl.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toolbarMoreMenuEl.classList.toggle('hidden');
+  });
+  
+  document.addEventListener('click', (e) => {
+    if (!toolbarMoreMenuEl.classList.contains('hidden')) {
+      const target = e.target as HTMLElement;
+      if (!toolbarMoreMenuEl.contains(target) && target !== toolbarMoreBtnEl) {
+        toolbarMoreMenuEl.classList.add('hidden');
+      }
+    }
+  });
+  
   toggleThinkBtnEl.addEventListener('click', () => {
     void toggleCurrentAgentThink();
   });
@@ -961,6 +1027,22 @@ export function setupEventListeners() {
     }
   });
   document.addEventListener('keydown', (event) => {
+    // Cmd/Ctrl + L: Focus input
+    if ((event.metaKey || event.ctrlKey) && event.key === 'l') {
+      event.preventDefault();
+      messageInputEl.focus();
+      return;
+    }
+
+    // Cmd/Ctrl + N: New session
+    if ((event.metaKey || event.ctrlKey) && event.key === 'n') {
+      event.preventDefault();
+      void import('./sessions').then(({ startNewSession }) => {
+        startNewSession();
+      });
+      return;
+    }
+
     if (event.key !== 'Escape') {
       return;
     }
@@ -1042,6 +1124,19 @@ export function setupEventListeners() {
       return;
     }
 
+    // Input history navigation
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      const cursorAtStart = messageInputEl.selectionStart === 0 && messageInputEl.selectionEnd === 0;
+      const cursorAtEnd = messageInputEl.selectionStart === messageInputEl.value.length && 
+                          messageInputEl.selectionEnd === messageInputEl.value.length;
+
+      if ((e.key === 'ArrowUp' && cursorAtStart) || (e.key === 'ArrowDown' && cursorAtEnd)) {
+        e.preventDefault();
+        navigateInputHistory(e.key === 'ArrowUp' ? 'up' : 'down');
+        return;
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       void sendMessage();
@@ -1052,6 +1147,10 @@ export function setupEventListeners() {
     messageInputEl.style.height = 'auto';
     messageInputEl.style.height = `${messageInputEl.scrollHeight}px`;
     updateSlashCommandMenu();
+    // Auto-save draft
+    if (state.currentSessionId) {
+      saveDraft(state.currentSessionId, messageInputEl.value);
+    }
   });
 
   messageInputEl.addEventListener('blur', () => {
@@ -1163,6 +1262,84 @@ export async function retryUserMessageById(messageId: string) {
   await sendPresetMessage(userMessage.content, '当前无法重试，请等待回复完成或检查连接状态');
 }
 
+// ── Input history navigation ──────────────────────────────────────────────────
+
+function recordRecentSlashCommand(commandId: string) {
+  // 移除旧记录（如果存在）
+  const index = state.recentSlashCommands.indexOf(commandId);
+  if (index !== -1) {
+    state.recentSlashCommands.splice(index, 1);
+  }
+  
+  // 添加到最前面
+  state.recentSlashCommands.unshift(commandId);
+  
+  // 最多保留 10 个
+  if (state.recentSlashCommands.length > 10) {
+    state.recentSlashCommands.pop();
+  }
+}
+
+function navigateInputHistory(direction: 'up' | 'down') {
+  const history = state.inputHistory;
+  const currentInput = messageInputEl.value;
+
+  if (direction === 'up') {
+    // Navigate backward in history
+    if (state.inputHistoryIndex < history.length - 1) {
+      // Save current input if at the start
+      if (state.inputHistoryIndex === -1) {
+        state.inputHistoryTemp = currentInput;
+      }
+      state.inputHistoryIndex++;
+      messageInputEl.value = history[history.length - 1 - state.inputHistoryIndex];
+    }
+  } else {
+    // Navigate forward in history
+    if (state.inputHistoryIndex > 0) {
+      state.inputHistoryIndex--;
+      messageInputEl.value = history[history.length - 1 - state.inputHistoryIndex];
+    } else if (state.inputHistoryIndex === 0) {
+      // Restore the temporary saved input
+      state.inputHistoryIndex = -1;
+      messageInputEl.value = state.inputHistoryTemp;
+      state.inputHistoryTemp = '';
+    }
+  }
+
+  // Update textarea height and cursor position
+  messageInputEl.style.height = 'auto';
+  messageInputEl.style.height = `${messageInputEl.scrollHeight}px`;
+  messageInputEl.setSelectionRange(messageInputEl.value.length, messageInputEl.value.length);
+
+  // Update draft
+  if (state.currentSessionId) {
+    saveDraft(state.currentSessionId, messageInputEl.value);
+  }
+}
+
+function addToInputHistory(content: string) {
+  // Don't add empty or whitespace-only content
+  if (!content.trim()) {
+    return;
+  }
+
+  // Don't add duplicates
+  const history = state.inputHistory;
+  if (history.length > 0 && history[history.length - 1] === content) {
+    return;
+  }
+
+  // Keep only last 100 items
+  if (history.length >= 100) {
+    history.shift();
+  }
+
+  history.push(content);
+  state.inputHistoryIndex = -1;
+  state.inputHistoryTemp = '';
+}
+
 // 发送消息
 const MESSAGE_TIMEOUT_MS = TIMEOUTS.messageSend;
 
@@ -1174,6 +1351,9 @@ export async function sendMessage() {
     return;
   }
 
+  // Add to input history
+  addToInputHistory(content);
+
   if (requestAgentId && state.inflightSessionByAgent[requestAgentId]) {
     return;
   }
@@ -1183,6 +1363,9 @@ export async function sendMessage() {
     messageInputEl.value = '';
     messageInputEl.style.height = 'auto';
     hideSlashCommandMenu();
+    if (requestSessionId) {
+      clearDraft(requestSessionId);
+    }
     return;
   }
 
@@ -1196,6 +1379,9 @@ export async function sendMessage() {
       messageInputEl.value = '';
       messageInputEl.style.height = 'auto';
       hideSlashCommandMenu();
+      if (requestSessionId) {
+        clearDraft(requestSessionId);
+      }
       return;
     }
   }
@@ -1215,6 +1401,9 @@ export async function sendMessage() {
   messageInputEl.value = '';
   messageInputEl.style.height = 'auto';
   hideSlashCommandMenu();
+  if (requestSessionId) {
+    clearDraft(requestSessionId);
+  }
 
   const sendingMessage: Message = {
     id: `msg-${Date.now()}-sending`,
@@ -1306,5 +1495,25 @@ export async function stopCurrentMessage() {
     await stopMessage(requestAgentId);
   } catch (error) {
     showError(`停止请求失败: ${String(error)}`);
+  }
+}
+
+// ── Draft restoration ────────────────────────────────────────────────────────
+
+export function restoreDraftForSession(sessionId: string | null) {
+  if (!sessionId) {
+    messageInputEl.value = '';
+    messageInputEl.style.height = 'auto';
+    return;
+  }
+
+  const draft = getDraft(sessionId);
+  if (draft) {
+    messageInputEl.value = draft;
+    messageInputEl.style.height = 'auto';
+    messageInputEl.style.height = `${messageInputEl.scrollHeight}px`;
+  } else {
+    messageInputEl.value = '';
+    messageInputEl.style.height = 'auto';
   }
 }

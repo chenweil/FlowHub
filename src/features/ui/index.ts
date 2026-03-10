@@ -5,7 +5,7 @@ import {
   readHtmlArtifact,
   resolveHtmlArtifactPath,
 } from '../../services/tauri';
-import { formatTime } from '../../lib/utils';
+import { formatTime, formatDateSeparator } from '../../lib/utils';
 import { escapeHtml } from '../../lib/html';
 import { formatMessageContent } from '../../lib/markdown';
 import type { ToolCall, GitFileChange, GitStatus } from '../../types';
@@ -533,6 +533,31 @@ export async function openArtifactPreview(path: string) {
 
 export function onChatMessagesClick(event: MouseEvent) {
   const target = event.target as HTMLElement;
+
+  // Code block copy button
+  const copyBtn = target.closest('button.md-code-copy-btn') as HTMLButtonElement | null;
+  if (copyBtn) {
+    const encodedCode = copyBtn.dataset.code;
+    if (encodedCode) {
+      const code = decodeURIComponent(encodedCode);
+      navigator.clipboard.writeText(code).then(() => {
+        copyBtn.textContent = '已复制';
+        copyBtn.classList.add('copied');
+        setTimeout(() => {
+          copyBtn.textContent = '复制';
+          copyBtn.classList.remove('copied');
+        }, 2000);
+      }).catch((err) => {
+        console.error('Failed to copy code:', err);
+        copyBtn.textContent = '复制失败';
+        setTimeout(() => {
+          copyBtn.textContent = '复制';
+        }, 2000);
+      });
+    }
+    return;
+  }
+
   const artifactBtn = target.closest('button[data-artifact-preview-path]') as HTMLButtonElement | null;
   if (artifactBtn?.dataset.artifactPreviewPath) {
     const path = decodeArtifactPath(artifactBtn.dataset.artifactPreviewPath);
@@ -763,11 +788,25 @@ export function renderMessages() {
     return;
   }
 
+  let lastDateKey = '';
+
   chatMessagesEl.innerHTML =
     state.messages
       .map((msg, index) => {
+      // Date separator
+      const messageDate = new Date(msg.timestamp);
+      messageDate.setHours(0, 0, 0, 0);
+      const dateKey = messageDate.toISOString().split('T')[0];
+      const shouldShowDateSeparator = dateKey !== lastDateKey;
+      lastDateKey = dateKey;
+
+      const dateSeparatorHtml = shouldShowDateSeparator
+        ? `<div class="date-separator"><span>${formatDateSeparator(new Date(msg.timestamp))}</span></div>`
+        : '';
+
       if (msg.role === 'thought') {
         return `
+        ${dateSeparatorHtml}
         <div class="message thought">
           <div class="message-avatar">💭</div>
           <div class="message-content thought-content">
@@ -842,6 +881,7 @@ export function renderMessages() {
       }
 
       return `
+      ${dateSeparatorHtml}
       <div class="message ${msg.role}">
         <div class="message-avatar">${avatar}</div>
         <div class="message-content">
@@ -859,4 +899,24 @@ export function renderMessages() {
 // 滚动到底部
 export function scrollToBottom() {
   chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+}
+
+// 保存当前会话的滚动位置
+export function saveScrollPosition(sessionId: string | null) {
+  if (sessionId) {
+    state.scrollPositionsBySession[sessionId] = chatMessagesEl.scrollTop;
+  }
+}
+
+// 恢复会话的滚动位置
+export function restoreScrollPosition(sessionId: string | null) {
+  if (sessionId && state.scrollPositionsBySession[sessionId] !== undefined) {
+    // 延迟恢复，等待消息渲染完成
+    requestAnimationFrame(() => {
+      chatMessagesEl.scrollTop = state.scrollPositionsBySession[sessionId];
+    });
+  } else {
+    // 如果没有保存的位置，滚动到底部
+    scrollToBottom();
+  }
 }

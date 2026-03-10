@@ -35,7 +35,17 @@ export const state = {
   // ── 关联数据 ──────────────────────────────────────────────────────────────
   sessionsByAgent: {} as Record<string, Session[]>,
   messagesBySession: {} as Record<string, Message[]>,
+  draftsBySession: {} as Record<string, string>,
+  scrollPositionsBySession: {} as Record<string, number>,
   inflightSessionByAgent: {} as Record<string, string>,
+  
+  // ── 输入历史 ──────────────────────────────────────────────────────────────
+  inputHistory: [] as string[],
+  inputHistoryIndex: -1,
+  inputHistoryTemp: '',
+  
+  // ── Slash 命令最近使用 ───────────────────────────────────────────────────
+  recentSlashCommands: [] as string[], // 存储命令 ID，最多保留 10 个
   registryByAgent: {} as Record<string, AgentRegistry>,
   toolCallsByAgent: {} as Record<string, ToolCall[]>,
   modelOptionsCacheByAgent: {} as Record<string, ModelOption[]>,

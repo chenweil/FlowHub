@@ -10,6 +10,7 @@ import {
 } from './features/app';
 import { loadAgents, updateCurrentAgentModelUI, updateCurrentAgentThinkUI } from './features/agents';
 import { warmUpArtifactPreviewFrame } from './features/ui';
+import { persistStorageSnapshot, buildStorageSnapshot } from './features/storage';
 
 async function init() {
   console.log('Initializing app...');
@@ -23,6 +24,19 @@ async function init() {
   updateCurrentAgentModelUI();
   updateCurrentAgentThinkUI();
   refreshComposerState();
+  
+  // 定期保存（每30秒）
+  setInterval(() => {
+    const snapshot = buildStorageSnapshot();
+    void persistStorageSnapshot(snapshot);
+  }, 30000);
+  
+  // 页面卸载时保存
+  window.addEventListener('beforeunload', () => {
+    const snapshot = buildStorageSnapshot();
+    void persistStorageSnapshot(snapshot);
+  });
+  
   console.log('App initialized');
 }
 
