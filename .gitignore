@@ -24,3 +24,6 @@ opencode.jsonc
 
 # Local assistant workspace
 .claude/
+
+# Git worktrees
+.worktrees/
