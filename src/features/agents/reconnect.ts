@@ -83,6 +83,13 @@ async function reconnectAgentWithOptions(
     }
 
     if (!silent) renderAgentList();
+
+    // 刷新输入框状态（如果当前是重连的 agent）
+    if (state.currentAgentId === agentId) {
+      const { refreshComposerState } = await import('../app');
+      refreshComposerState();
+    }
+
     return { success: true };
   } catch (error) {
     agent.status = previousStatus;
