@@ -505,8 +505,7 @@ export function refreshComposerState() {
   }
 
   if (!isConnected) {
-    setComposerState('ready', '当前 Agent 离线，仅可输入本地命令（如 /agents autoreconnect）');
-    messageInputEl.placeholder = '输入本地命令，例如 /agents autoreconnect';
+    setComposerState('disabled', '当前 Agent 离线，请连接后输入');
     newSessionBtnEl.disabled = true;
     clearChatBtnEl.disabled = false;
     return;
