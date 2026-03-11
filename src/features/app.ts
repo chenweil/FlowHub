@@ -347,7 +347,7 @@ function applySendKeyModeSelection(mode: SendKeyMode) {
 }
 
 function initializeSendKeyMode() {
-  const savedMode = localStorage.getItem('iflow-send-key-mode') as SendKeyMode | null;
+  const savedMode = localStorage.getItem('iflow-send-key-mode');
   const mode: SendKeyMode = savedMode === 'mod+enter' ? 'mod+enter' : 'enter';
   state.sendKeyMode = mode;
   sendKeyModeSelectEl.value = mode;
@@ -357,18 +357,22 @@ function isModKeyPressed(event: KeyboardEvent): boolean {
   return event.metaKey || event.ctrlKey;
 }
 
+function isImeComposing(event: KeyboardEvent): boolean {
+  return event.isComposing || isComposing;
+}
+
 function shouldSendOnEnter(event: KeyboardEvent): boolean {
-  if (state.sendKeyMode === 'mod+enter') {
+  if (state.sendKeyMode !== 'enter') {
     return false;
   }
-  return event.key === 'Enter' && !event.shiftKey && !event.isComposing && !isComposing && !isModKeyPressed(event);
+  return event.key === 'Enter' && !event.shiftKey && !isImeComposing(event) && !isModKeyPressed(event);
 }
 
 function shouldSendOnModEnter(event: KeyboardEvent): boolean {
   if (state.sendKeyMode !== 'mod+enter') {
     return false;
   }
-  return event.key === 'Enter' && isModKeyPressed(event) && !event.isComposing && !isComposing;
+  return event.key === 'Enter' && isModKeyPressed(event) && !isImeComposing(event);
 }
 
 function isSupportedAudioFile(file: File): boolean {
