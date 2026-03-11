@@ -139,6 +139,7 @@ export interface IflowHistoryMessageRecord {
 export type ComposerState = 'ready' | 'busy' | 'disabled';
 export type StreamMessageType = 'content' | 'thought' | 'system' | 'plan';
 export type ThemeMode = 'system' | 'light' | 'dark';
+export type SendKeyMode = 'enter' | 'mod+enter';
 
 export interface ParsedModelSlashCommand {
   kind: 'help' | 'switch' | 'current';

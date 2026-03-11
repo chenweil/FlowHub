@@ -80,6 +80,9 @@ export const notificationSoundUploadBtnEl = document.getElementById(
 export const notificationSoundUploadInputEl = document.getElementById(
   'notification-sound-upload-input'
 ) as HTMLInputElement;
+export const sendKeyModeSelectEl = document.getElementById(
+  'send-key-mode-select'
+) as HTMLSelectElement;
 export const appVersionEl = document.getElementById('app-version') as HTMLDivElement;
 
 // Confirm modal

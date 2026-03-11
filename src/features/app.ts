@@ -17,7 +17,7 @@ import {
 import { TIMEOUTS } from '../config';
 import { generateAcpSessionId, streamTypeToRole } from '../lib/utils';
 import { escapeHtml } from '../lib/html';
-import type { Message, SlashMenuItem, ComposerState, StreamMessageType, ThemeMode } from '../types';
+import type { Message, SlashMenuItem, ComposerState, StreamMessageType, ThemeMode, SendKeyMode } from '../types';
 import { state, canUseConversationQuickAction } from '../store';
 import {
   addAgentBtnEl,
@@ -68,6 +68,7 @@ import {
   notificationDelaySecondInputEl,
   notificationSoundUploadBtnEl,
   notificationSoundUploadInputEl,
+  sendKeyModeSelectEl,
   appVersionEl,
   toolbarMoreBtnEl,
   toolbarMoreMenuEl,
@@ -220,6 +221,9 @@ const notificationAudioEl = new Audio();
 notificationAudioEl.preload = 'auto';
 let notificationSoundTimerId: number | null = null;
 
+// IME composition state tracking (more reliable than e.isComposing)
+let isComposing = false;
+
 const AUTO_RECONNECT_MODE_LABELS: Record<AutoReconnectMode, string> = {
   last: '最后一个',
   all: '全部',
@@ -336,6 +340,37 @@ function applyNotificationDelayFromInputs() {
   applyNotificationDelaySelection(totalMs);
 }
 
+function applySendKeyModeSelection(mode: SendKeyMode) {
+  state.sendKeyMode = mode;
+  localStorage.setItem('iflow-send-key-mode', mode);
+  sendKeyModeSelectEl.value = mode;
+}
+
+function initializeSendKeyMode() {
+  const savedMode = localStorage.getItem('iflow-send-key-mode') as SendKeyMode | null;
+  const mode: SendKeyMode = savedMode === 'mod+enter' ? 'mod+enter' : 'enter';
+  state.sendKeyMode = mode;
+  sendKeyModeSelectEl.value = mode;
+}
+
+function isModKeyPressed(event: KeyboardEvent): boolean {
+  return event.metaKey || event.ctrlKey;
+}
+
+function shouldSendOnEnter(event: KeyboardEvent): boolean {
+  if (state.sendKeyMode === 'mod+enter') {
+    return false;
+  }
+  return event.key === 'Enter' && !event.shiftKey && !event.isComposing && !isComposing && !isModKeyPressed(event);
+}
+
+function shouldSendOnModEnter(event: KeyboardEvent): boolean {
+  if (state.sendKeyMode !== 'mod+enter') {
+    return false;
+  }
+  return event.key === 'Enter' && isModKeyPressed(event) && !event.isComposing && !isComposing;
+}
+
 function isSupportedAudioFile(file: File): boolean {
   if (file.type.startsWith('audio/')) {
     return true;
@@ -397,6 +432,10 @@ export function setupNotificationSoundSelector() {
 
 export function setupNotificationDelayInputs() {
   applyNotificationDelaySelection(state.notificationDelayMs);
+}
+
+export function setupSendKeyMode() {
+  initializeSendKeyMode();
 }
 
 export async function playTaskFinishSound() {
@@ -934,6 +973,11 @@ export function setupEventListeners() {
   setupAutoReconnectModeSelector();
   setupNotificationSoundSelector();
   setupNotificationDelayInputs();
+  setupSendKeyMode();
+
+  sendKeyModeSelectEl.addEventListener('change', () => {
+    applySendKeyModeSelection(sendKeyModeSelectEl.value as SendKeyMode);
+  });
 
   themeToggleBtnEl.addEventListener('click', () => {
     state.currentTheme = THEME_CYCLE[state.currentTheme];
@@ -1110,6 +1154,18 @@ export function setupEventListeners() {
     }
   });
 
+  // IME composition tracking - more reliable than e.isComposing
+  // Use a flag with delayed reset because compositionend fires before keydown
+  messageInputEl.addEventListener('compositionstart', () => {
+    isComposing = true;
+  });
+  messageInputEl.addEventListener('compositionend', () => {
+    // Delay reset to ensure keydown can detect composition just ended
+    setTimeout(() => {
+      isComposing = false;
+    }, 0);
+  });
+
   messageInputEl.addEventListener('keydown', (e) => {
     if (handleSlashMenuKeydown(e)) {
       return;
@@ -1128,7 +1184,7 @@ export function setupEventListeners() {
       }
     }
 
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (shouldSendOnEnter(e) || shouldSendOnModEnter(e)) {
       e.preventDefault();
       void sendMessage();
     }

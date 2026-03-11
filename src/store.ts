@@ -10,11 +10,20 @@ import type {
   SlashMenuItem,
   ThemeMode,
   GitFileChange,
+  SendKeyMode,
 } from './types';
 
 const NOTIFICATION_DELAY_STORAGE_KEY = 'iflow-notification-delay-ms';
 const NOTIFICATION_DEFAULT_DELAY_MS = 5000;
 const NOTIFICATION_MAX_DELAY_MS = 59 * 60 * 1000 + 59 * 1000;
+const SEND_KEY_MODE_STORAGE_KEY = 'iflow-send-key-mode';
+
+function normalizeSendKeyMode(rawValue: string | null): SendKeyMode {
+  if (rawValue === 'mod+enter') {
+    return 'mod+enter';
+  }
+  return 'enter';
+}
 
 function normalizeNotificationDelayMs(rawValue: string | null): number {
   const parsed = Number.parseInt(rawValue || '', 10);
@@ -81,7 +90,14 @@ export const state = {
   notificationDelayMs: normalizeNotificationDelayMs(localStorage.getItem(NOTIFICATION_DELAY_STORAGE_KEY)),
   notificationCustomSoundDataUrl: localStorage.getItem('iflow-notification-custom-sound'),
   notificationCustomSoundName: localStorage.getItem('iflow-notification-custom-sound-name'),
+  // send key mode
+  sendKeyMode: normalizeSendKeyMode(localStorage.getItem(SEND_KEY_MODE_STORAGE_KEY)),
 };
+
+export function setSendKeyMode(mode: SendKeyMode): void {
+  localStorage.setItem(SEND_KEY_MODE_STORAGE_KEY, mode);
+  state.sendKeyMode = mode;
+}
 
 export function canUseConversationQuickAction(): boolean {
   if (!state.currentAgentId || !state.currentSessionId) {
