@@ -298,6 +298,9 @@ function handleAgentAction(action: string, agentId: string) {
   }
 }
 
+let lastAgentClickId = '';
+let lastAgentClickTime = 0;
+
 export function onAgentListClick(event: MouseEvent) {
   const rawTarget = event.target;
   const target =
@@ -345,7 +348,19 @@ export function onAgentListClick(event: MouseEvent) {
 
   const agentItem = target.closest('.agent-item[data-agent-id]') as HTMLDivElement | null;
   if (agentItem?.dataset.agentId) {
-    selectAgent(agentItem.dataset.agentId);
+    const agentId = agentItem.dataset.agentId;
+    const now = Date.now();
+    if (agentId === lastAgentClickId && now - lastAgentClickTime < 400) {
+      lastAgentClickId = '';
+      lastAgentClickTime = 0;
+      void import('./reconnect').then(({ reconnectAgent }) => {
+        reconnectAgent(agentId);
+      });
+      return;
+    }
+    lastAgentClickId = agentId;
+    lastAgentClickTime = now;
+    selectAgent(agentId);
   }
 }
 
