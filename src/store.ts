@@ -84,6 +84,9 @@ export const state = {
   // message send timeout
   messageTimeout: null as number | null,
 
+  // compression state
+  isCompressing: false as boolean,
+
   // theme
   currentTheme: ((localStorage.getItem('iflow-theme') as ThemeMode) || 'system') as ThemeMode,
   notificationSoundId: localStorage.getItem('iflow-notification-sound') || 'bell-happy.wav',

@@ -5,6 +5,7 @@ export const agentListEl = document.getElementById('agent-list') as HTMLDivEleme
 export const sessionListEl = document.getElementById('session-list') as HTMLDivElement;
 export const chatMessagesEl = document.getElementById('chat-messages') as HTMLDivElement;
 export const messageInputEl = document.getElementById('message-input') as HTMLTextAreaElement;
+export const compressBtnEl = document.getElementById('compress-btn') as HTMLButtonElement;
 export const sendBtnEl = document.getElementById('send-btn') as HTMLButtonElement;
 export const addAgentModalEl = document.getElementById('add-agent-modal') as HTMLDivElement;
 export const closeModalBtnEl = document.getElementById('close-modal') as HTMLButtonElement;

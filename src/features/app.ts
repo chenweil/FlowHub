@@ -25,6 +25,7 @@ import {
   sessionListEl,
   chatMessagesEl,
   messageInputEl,
+  compressBtnEl,
   sendBtnEl,
   addAgentModalEl,
   closeModalBtnEl,
@@ -503,12 +504,14 @@ export function setComposerState(state: ComposerState, hint: string) {
   if (state === 'ready') {
     messageInputEl.disabled = false;
     setSendButtonMode('send', false);
+    compressBtnEl.disabled = false;
     messageInputEl.placeholder = '输入消息，或输入 / 查看命令...';
     updateSlashCommandMenu();
     return;
   }
 
   messageInputEl.disabled = true;
+  compressBtnEl.disabled = true;
   if (state === 'busy') {
     setSendButtonMode('stop', false);
     messageInputEl.placeholder = '正在回复中，可点击停止按钮中断';
@@ -549,6 +552,9 @@ export function refreshComposerState() {
   setComposerState('ready', '当前会话已完成，可继续输入（输入 / 可查看命令）');
   newSessionBtnEl.disabled = false;
   clearChatBtnEl.disabled = false;
+  // 空会话无内容可压缩，禁用压缩按钮
+  const hasConversation = state.messages.some((m) => m.role === 'user' || m.role === 'assistant');
+  compressBtnEl.disabled = !hasConversation;
 }
 
 // 设置 Tauri 事件监听
@@ -623,6 +629,7 @@ export function setupTauriEventListeners() {
 
       state.messages = state.messages.filter((m) => !m.id.includes('-sending') && !m.id.includes('-processing'));
       renderMessages();
+      clearCompressingState();
       refreshComposerState();
       void refreshAgentGitChanges(payload.agentId);
     } else if (targetSessionId) {
@@ -632,6 +639,7 @@ export function setupTauriEventListeners() {
       state.messagesBySession[targetSessionId] = sessionMessages;
       void saveSessionMessages();
       renderSessionList();
+      clearCompressingState();
       refreshComposerState();
     }
 
@@ -646,6 +654,7 @@ export function setupTauriEventListeners() {
       return;
     }
     showError(`错误: ${payload.error || '未知错误'}`);
+    clearCompressingState();
     refreshComposerState();
   });
 }
@@ -1233,6 +1242,12 @@ export function setupEventListeners() {
     }
     void sendMessage();
   });
+
+  compressBtnEl.addEventListener('click', () => {
+    if (isCurrentAgentBusy()) return;
+    void sendCompressToCurrentSession();
+  });
+
   chatMessagesEl.addEventListener('click', onChatMessagesClick);
   toolCallsListEl.addEventListener('click', onToolCallsClick);
   gitChangesListEl.addEventListener('click', onGitChangesClick);
@@ -1547,6 +1562,50 @@ export async function stopCurrentMessage() {
   } catch (error) {
     showError(`停止请求失败: ${String(error)}`);
   }
+}
+
+// ── Context Compression ────────────────────────────────────────────────────────
+
+async function sendCompressToCurrentSession() {
+  const agentId = state.currentAgentId;
+  const sessionId = state.currentSessionId;
+  if (!agentId || !sessionId) return;
+
+  const agent = state.agents.find((a) => a.id === agentId);
+  if (agent?.status !== 'connected') {
+    showError('当前 Agent 离线，无法执行压缩');
+    return;
+  }
+
+  // 添加用户消息到当前会话
+  const userMessage: Message = {
+    id: `msg-${Date.now()}`,
+    role: 'user',
+    content: '/compress',
+    timestamp: new Date(),
+  };
+  state.messages.push(userMessage);
+  touchCurrentSession();
+  renderMessages();
+  scrollToBottom();
+
+  state.inflightSessionByAgent[agentId] = sessionId;
+  refreshComposerState();
+
+  try {
+    // 发送 null session ID，让 adapter 使用当前 session，避免 session switch
+    await tauriSendMessage(agentId, '/compress', null);
+  } catch (error) {
+    showError(`压缩失败: ${String(error)}`);
+    delete state.inflightSessionByAgent[agentId];
+    refreshComposerState();
+  }
+}
+
+export function clearCompressingState() {
+  state.isCompressing = false;
+  compressBtnEl.classList.remove('compressing');
+  compressBtnEl.title = '压缩上下文';
 }
 
 // ── Draft restoration ────────────────────────────────────────────────────────

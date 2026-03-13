@@ -1056,6 +1056,47 @@ body {
   transition: background-color 0.2s;
 }
 
+.btn-compress {
+  width: 40px;
+  height: 40px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.2s, border-color 0.2s;
+}
+
+.btn-compress:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.btn-compress:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-compress.compressing {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+  color: white;
+  animation: compress-pulse 1s ease-in-out infinite;
+}
+
+@keyframes compress-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
 .btn-send:hover:not(:disabled) {
   background: var(--accent-hover);
 }
