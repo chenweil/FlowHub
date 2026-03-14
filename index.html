@@ -139,12 +139,6 @@
                 aria-label="消息输入框"
               ></textarea>
             </div>
-            <div id="context-usage-wrapper" class="context-usage-wrapper" style="display:none">
-              <div id="context-usage-bar" class="context-usage-bar" title="上下文使用量">
-                <div class="context-usage-fill" id="context-usage-fill"></div>
-              </div>
-              <span id="context-usage-text" class="context-usage-text"></span>
-            </div>
             <button id="send-btn" class="btn-send" disabled aria-label="发送消息">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="22" y1="2" x2="11" y2="13"></line>
@@ -154,6 +148,12 @@
           </div>
           <div class="input-hints">
             <span id="input-status-hint">按 Enter 发送，Shift + Enter 换行</span>
+            <div id="context-usage-wrapper" class="context-usage-wrapper" style="display:none">
+              <div id="context-usage-bar" class="context-usage-bar" title="上下文使用量">
+                <div class="context-usage-fill" id="context-usage-fill"></div>
+              </div>
+              <span id="context-usage-text" class="context-usage-text"></span>
+            </div>
           </div>
         </div>
       </main>

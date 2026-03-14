@@ -2151,6 +2151,14 @@ body {
   margin-top: 8px;
   font-size: 12px;
   color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.input-hints .context-usage-wrapper {
+  margin-left: auto;
+  margin-right: 8px;
 }
 
 /* 弹窗 */
