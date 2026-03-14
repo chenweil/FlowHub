@@ -132,8 +132,11 @@ export function parseStoredMessage(message: StoredMessage): Message {
 
 export function toStoredMessage(message: Message): StoredMessage {
   return {
-    ...message,
+    id: message.id,
+    role: message.role,
+    content: message.content,
     timestamp: message.timestamp.toISOString(),
+    ...(message.agentId ? { agentId: message.agentId } : {}),
   };
 }
 

@@ -1097,6 +1097,69 @@ body {
   }
 }
 
+/* Context usage progress bar */
+.context-usage-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  align-self: center;
+  cursor: pointer;
+  min-width: 48px;
+}
+
+.context-usage-bar {
+  width: 60px;
+  height: 6px;
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  overflow: hidden;
+  transition: opacity 0.2s;
+}
+
+.context-usage-wrapper:hover .context-usage-bar {
+  opacity: 0.8;
+}
+
+.context-usage-text {
+  font-size: 10px;
+  color: var(--text-muted);
+  line-height: 1;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.context-usage-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease, background-color 0.3s ease;
+  min-width: 0;
+}
+
+.context-usage-fill.context-usage-ok {
+  background-color: var(--success-color);
+}
+
+.context-usage-fill.context-usage-warning {
+  background-color: var(--warning-color);
+}
+
+.context-usage-fill.context-usage-danger {
+  background-color: var(--error-color);
+}
+
+.context-usage-text.context-usage-ok {
+  color: var(--text-muted);
+}
+
+.context-usage-text.context-usage-warning {
+  color: var(--warning-color);
+}
+
+.context-usage-text.context-usage-danger {
+  color: var(--error-color);
+}
+
 .btn-send:hover:not(:disabled) {
   background: var(--accent-hover);
 }

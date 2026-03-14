@@ -555,6 +555,11 @@ export function refreshComposerState() {
   // 空会话无内容可压缩，禁用压缩按钮
   const hasConversation = state.messages.some((m) => m.role === 'user' || m.role === 'assistant');
   compressBtnEl.disabled = !hasConversation;
+
+  // Update context usage bar
+  void import('./contextUsage').then(({ updateContextUsageDisplay }) => {
+    updateContextUsageDisplay();
+  });
 }
 
 // 设置 Tauri 事件监听
@@ -695,6 +700,8 @@ export function appendStreamMessage(
 
   lastMessage.content += normalizedContent;
   lastMessage.timestamp = new Date();
+  // Invalidate token cache — content changed via streaming
+  delete lastMessage.estimatedTokens;
   if (role === 'assistant') {
     syncAgentModelFromAboutContent(agentId, lastMessage.content);
   }
@@ -1247,6 +1254,15 @@ export function setupEventListeners() {
     if (isCurrentAgentBusy()) return;
     void sendCompressToCurrentSession();
   });
+
+  // Context usage bar click → trigger compression
+  const contextUsageWrapperEl = document.getElementById('context-usage-wrapper');
+  if (contextUsageWrapperEl) {
+    contextUsageWrapperEl.addEventListener('click', () => {
+      if (isCurrentAgentBusy()) return;
+      void sendCompressToCurrentSession();
+    });
+  }
 
   chatMessagesEl.addEventListener('click', onChatMessagesClick);
   toolCallsListEl.addEventListener('click', onToolCallsClick);

@@ -137,6 +137,10 @@ export function applyAgentModelRegistry(
     if (state.modelSelectorOpen) {
       renderCurrentAgentModelMenu(agent, state.modelOptionsCacheByAgent[agentId] || []);
     }
+    // Refresh context usage bar when model (and thus context window) changes
+    void import('../contextUsage').then(({ updateContextUsageDisplay }) => {
+      updateContextUsageDisplay();
+    });
   }
 }
 

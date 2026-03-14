@@ -30,6 +30,7 @@ export interface Message {
   timestamp: Date;
   agentId?: string;
   toolCalls?: ToolCall[];
+  estimatedTokens?: number;
 }
 
 export interface ToolCall {

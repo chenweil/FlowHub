@@ -894,6 +894,11 @@ export function renderMessages() {
     `;
       })
       .join('') + thinkingIndicator;
+
+  // Update context usage progress bar
+  void import('../contextUsage').then(({ updateContextUsageDisplay }) => {
+    updateContextUsageDisplay();
+  });
 }
 
 // 滚动到底部
