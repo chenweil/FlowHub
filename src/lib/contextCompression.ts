@@ -1,10 +1,11 @@
-import type { Agent, Message } from '../types';
+import type { Agent, Message, Session } from '../types';
 
 export interface CompressionEligibilityInput {
   agent: Agent | null;
   hasSession: boolean;
   isBusy: boolean;
   messages: Message[];
+  sessionSource?: Session['source'];
 }
 
 export function hasConversationMessages(messages: Message[]): boolean {
@@ -34,6 +35,9 @@ export function getCompressionDisabledReason(input: CompressionEligibilityInput)
   }
   if (!input.agent || input.agent.status !== 'connected') {
     return 'Agent 离线';
+  }
+  if (input.sessionSource === 'iflow-log') {
+    return '历史会话不可压缩';
   }
   if (input.isBusy) {
     return '正在生成回复中';

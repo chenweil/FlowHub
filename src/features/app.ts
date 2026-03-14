@@ -1255,11 +1255,17 @@ export function setupEventListeners() {
       const agent = state.currentAgentId
         ? state.agents.find((a) => a.id === state.currentAgentId)
         : null;
+      const currentSession = state.currentAgentId && state.currentSessionId
+        ? (state.sessionsByAgent[state.currentAgentId] || []).find(
+          (item) => item.id === state.currentSessionId
+        )
+        : null;
       const canCompress = canCompressContext({
         agent,
         hasSession: Boolean(state.currentSessionId),
         isBusy,
         messages: state.messages,
+        sessionSource: currentSession?.source,
       });
       if (!canCompress) {
         return;

@@ -33,6 +33,11 @@ export function updateContextUsageDisplay(): void {
   const agent = state.currentAgentId
     ? state.agents.find((a) => a.id === state.currentAgentId)
     : null;
+  const currentSession = state.currentAgentId && state.currentSessionId
+    ? (state.sessionsByAgent[state.currentAgentId] || []).find(
+      (item) => item.id === state.currentSessionId
+    )
+    : null;
 
   if (!agent || !state.currentSessionId) {
     contextUsageWrapperEl.style.display = 'none';
@@ -80,6 +85,7 @@ export function updateContextUsageDisplay(): void {
     hasSession: Boolean(state.currentSessionId),
     isBusy,
     messages: state.messages,
+    sessionSource: currentSession?.source,
   };
   const canCompress = canCompressContext(eligibilityInput);
   const disabledReason = getCompressionDisabledReason(eligibilityInput);

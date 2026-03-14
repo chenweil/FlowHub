@@ -111,6 +111,16 @@ describe('contextCompression', () => {
       getCompressionDisabledReason({
         agent: baseAgent,
         hasSession: true,
+        isBusy: false,
+        messages: [userMessage, assistantMessage],
+        sessionSource: 'iflow-log',
+      })
+    ).toBe('历史会话不可压缩');
+
+    expect(
+      getCompressionDisabledReason({
+        agent: baseAgent,
+        hasSession: true,
         isBusy: true,
         messages: [userMessage, assistantMessage],
       })
