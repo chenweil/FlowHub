@@ -5,7 +5,6 @@ export const agentListEl = document.getElementById('agent-list') as HTMLDivEleme
 export const sessionListEl = document.getElementById('session-list') as HTMLDivElement;
 export const chatMessagesEl = document.getElementById('chat-messages') as HTMLDivElement;
 export const messageInputEl = document.getElementById('message-input') as HTMLTextAreaElement;
-export const compressBtnEl = document.getElementById('compress-btn') as HTMLButtonElement;
 export const sendBtnEl = document.getElementById('send-btn') as HTMLButtonElement;
 export const addAgentModalEl = document.getElementById('add-agent-modal') as HTMLDivElement;
 export const closeModalBtnEl = document.getElementById('close-modal') as HTMLButtonElement;
@@ -96,9 +95,18 @@ export const confirmOkBtnEl = document.getElementById('confirm-ok') as HTMLButto
 
 // ── Confirm dialog ────────────────────────────────────────────────────────
 
+type ConfirmDialogOptions = { okText?: string; cancelText?: string };
+
 let confirmResolve: ((result: boolean) => void) | null = null;
 let isConfirmDialogOpen = false;
-let confirmQueue: Array<{ title: string; message: string; resolve: (result: boolean) => void }> = [];
+let confirmQueue: Array<{
+  title: string;
+  message: string;
+  resolve: (result: boolean) => void;
+  options?: ConfirmDialogOptions;
+}> = [];
+const defaultConfirmOkText = confirmOkBtnEl.textContent || '确认';
+const defaultConfirmCancelText = confirmCancelBtnEl.textContent || '取消';
 
 // ── Focus trap management ──────────────────────────────────────────────────
 
@@ -148,17 +156,23 @@ export function trapFocusInModal(modalEl: HTMLElement) {
   };
 }
 
-export function showConfirmDialog(title: string, message: string): Promise<boolean> {
+export function showConfirmDialog(
+  title: string,
+  message: string,
+  options?: ConfirmDialogOptions
+): Promise<boolean> {
   return new Promise((resolve) => {
     // 如果弹窗已打开，将请求加入队列
     if (isConfirmDialogOpen) {
-      confirmQueue.push({ title, message, resolve });
+      confirmQueue.push({ title, message, resolve, options });
       return;
     }
     
     isConfirmDialogOpen = true;
     confirmTitleEl.textContent = title;
     confirmMessageEl.textContent = message;
+    confirmOkBtnEl.textContent = options?.okText || defaultConfirmOkText;
+    confirmCancelBtnEl.textContent = options?.cancelText || defaultConfirmCancelText;
     confirmModalEl.classList.remove('hidden');
     confirmResolve = resolve;
     
@@ -171,6 +185,8 @@ export function showConfirmDialog(title: string, message: string): Promise<boole
 
 function closeConfirmDialog(result: boolean) {
   confirmModalEl.classList.add('hidden');
+  confirmOkBtnEl.textContent = defaultConfirmOkText;
+  confirmCancelBtnEl.textContent = defaultConfirmCancelText;
   
   // 清理焦点陷阱
   const cleanup = (confirmModalEl as any)._focusCleanup;
@@ -191,7 +207,7 @@ function closeConfirmDialog(result: boolean) {
   if (next) {
     // 使用 setTimeout 确保 DOM 状态稳定后再打开下一个弹窗
     setTimeout(() => {
-      void showConfirmDialog(next.title, next.message).then(next.resolve);
+      void showConfirmDialog(next.title, next.message, next.options).then(next.resolve);
     }, 0);
   }
 }

@@ -25,7 +25,6 @@ import {
   sessionListEl,
   chatMessagesEl,
   messageInputEl,
-  compressBtnEl,
   sendBtnEl,
   addAgentModalEl,
   closeModalBtnEl,
@@ -73,6 +72,7 @@ import {
   appVersionEl,
   toolbarMoreBtnEl,
   toolbarMoreMenuEl,
+  showConfirmDialog,
 } from '../dom';
 import {
   saveSessions,
@@ -129,6 +129,7 @@ import {
   closeGitDiffModal,
   onGitChangesClick,
 } from './ui';
+import { canCompressContext } from '../lib/contextCompression';
 
 const SEND_BUTTON_SEND_ICON = `
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -504,14 +505,12 @@ export function setComposerState(state: ComposerState, hint: string) {
   if (state === 'ready') {
     messageInputEl.disabled = false;
     setSendButtonMode('send', false);
-    compressBtnEl.disabled = false;
     messageInputEl.placeholder = '输入消息，或输入 / 查看命令...';
     updateSlashCommandMenu();
     return;
   }
 
   messageInputEl.disabled = true;
-  compressBtnEl.disabled = true;
   if (state === 'busy') {
     setSendButtonMode('stop', false);
     messageInputEl.placeholder = '正在回复中，可点击停止按钮中断';
@@ -552,9 +551,6 @@ export function refreshComposerState() {
   setComposerState('ready', '当前会话已完成，可继续输入（输入 / 可查看命令）');
   newSessionBtnEl.disabled = false;
   clearChatBtnEl.disabled = false;
-  // 空会话无内容可压缩，禁用压缩按钮
-  const hasConversation = state.messages.some((m) => m.role === 'user' || m.role === 'assistant');
-  compressBtnEl.disabled = !hasConversation;
 
   // Update context usage bar
   void import('./contextUsage').then(({ updateContextUsageDisplay }) => {
@@ -634,7 +630,6 @@ export function setupTauriEventListeners() {
 
       state.messages = state.messages.filter((m) => !m.id.includes('-sending') && !m.id.includes('-processing'));
       renderMessages();
-      clearCompressingState();
       refreshComposerState();
       void refreshAgentGitChanges(payload.agentId);
     } else if (targetSessionId) {
@@ -644,7 +639,6 @@ export function setupTauriEventListeners() {
       state.messagesBySession[targetSessionId] = sessionMessages;
       void saveSessionMessages();
       renderSessionList();
-      clearCompressingState();
       refreshComposerState();
     }
 
@@ -659,7 +653,6 @@ export function setupTauriEventListeners() {
       return;
     }
     showError(`错误: ${payload.error || '未知错误'}`);
-    clearCompressingState();
     refreshComposerState();
   });
 }
@@ -1250,16 +1243,37 @@ export function setupEventListeners() {
     void sendMessage();
   });
 
-  compressBtnEl.addEventListener('click', () => {
-    if (isCurrentAgentBusy()) return;
-    void sendCompressToCurrentSession();
-  });
-
   // Context usage bar click → trigger compression
   const contextUsageWrapperEl = document.getElementById('context-usage-wrapper');
   if (contextUsageWrapperEl) {
-    contextUsageWrapperEl.addEventListener('click', () => {
-      if (isCurrentAgentBusy()) return;
+    contextUsageWrapperEl.addEventListener('click', async () => {
+      const isBusy = isCurrentAgentBusy();
+      if (isBusy) {
+        return;
+      }
+
+      const agent = state.currentAgentId
+        ? state.agents.find((a) => a.id === state.currentAgentId)
+        : null;
+      const canCompress = canCompressContext({
+        agent,
+        hasSession: Boolean(state.currentSessionId),
+        isBusy,
+        messages: state.messages,
+      });
+      if (!canCompress) {
+        return;
+      }
+
+      const confirmed = await showConfirmDialog(
+        '压缩上下文',
+        '压缩后将合并历史对话为摘要，释放上下文空间。\n此操作不可撤销。',
+        { okText: '确认压缩' }
+      );
+      if (!confirmed) {
+        return;
+      }
+
       void sendCompressToCurrentSession();
     });
   }
@@ -1616,12 +1630,6 @@ async function sendCompressToCurrentSession() {
     delete state.inflightSessionByAgent[agentId];
     refreshComposerState();
   }
-}
-
-export function clearCompressingState() {
-  state.isCompressing = false;
-  compressBtnEl.classList.remove('compressing');
-  compressBtnEl.title = '压缩上下文';
 }
 
 // ── Draft restoration ────────────────────────────────────────────────────────
