@@ -1117,8 +1117,21 @@ body {
   transition: opacity 0.2s;
 }
 
-.context-usage-wrapper:hover .context-usage-bar {
+.context-usage-wrapper:not(.context-usage-disabled):hover .context-usage-bar {
   opacity: 0.8;
+}
+
+.context-usage-wrapper.context-usage-disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.context-usage-wrapper.context-usage-disabled .context-usage-bar {
+  opacity: 1;
+}
+
+.context-usage-wrapper.context-usage-disabled:hover .context-usage-bar {
+  opacity: 1;
 }
 
 .context-usage-text {

@@ -3,6 +3,11 @@
 import { state } from '../store';
 import { calculateContextUsage } from '../lib/tokens';
 import { getContextWindow } from '../lib/modelContext';
+import {
+  canCompressContext,
+  getCompressionDisabledReason,
+  hasConversationMessages,
+} from '../lib/contextCompression';
 
 const contextUsageWrapperEl = document.getElementById('context-usage-wrapper') as HTMLDivElement | null;
 const contextUsageBarEl = document.getElementById('context-usage-bar') as HTMLDivElement | null;
@@ -35,7 +40,7 @@ export function updateContextUsageDisplay(): void {
   }
 
   // Only show when there are user/assistant messages (not just system messages)
-  const hasConversation = state.messages.some((m) => m.role === 'user' || m.role === 'assistant');
+  const hasConversation = hasConversationMessages(state.messages);
   if (!hasConversation) {
     contextUsageWrapperEl.style.display = 'none';
     return;
@@ -69,8 +74,25 @@ export function updateContextUsageDisplay(): void {
     contextUsageTextEl.className = `context-usage-text ${colorClass}`;
   }
 
-  // Tooltip with full details
-  const tooltip = `上下文: ${formatTokenCount(usage.usedTokens)}/${formatTokenCount(usage.contextWindow)} (${Math.round(usage.percentage)}%, 估算)`;
+  const isBusy = Boolean(state.currentAgentId && state.inflightSessionByAgent[state.currentAgentId]);
+  const eligibilityInput = {
+    agent,
+    hasSession: Boolean(state.currentSessionId),
+    isBusy,
+    messages: state.messages,
+  };
+  const canCompress = canCompressContext(eligibilityInput);
+  const disabledReason = getCompressionDisabledReason(eligibilityInput);
+
+  contextUsageWrapperEl.classList.toggle('context-usage-disabled', !canCompress);
+  contextUsageWrapperEl.setAttribute('aria-disabled', String(!canCompress));
+
+  const baseTooltip = `上下文: ${formatTokenCount(usage.usedTokens)}/${formatTokenCount(usage.contextWindow)} (${Math.round(usage.percentage)}%, 估算)`;
+  const tooltip = canCompress
+    ? `${baseTooltip}，点击压缩`
+    : disabledReason
+      ? `${baseTooltip}，不可压缩：${disabledReason}`
+      : baseTooltip;
   if (contextUsageBarEl) {
     contextUsageBarEl.title = tooltip;
   }
