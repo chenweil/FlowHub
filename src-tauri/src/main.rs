@@ -22,7 +22,7 @@ mod storage;
 
 use artifact::{read_html_artifact, resolve_html_artifact_path};
 use commands::{
-    connect_iflow, disconnect_agent, send_message, shutdown_all_agents, stop_message,
+    connect_iflow, discover_skills, disconnect_agent, send_message, shutdown_all_agents, stop_message,
     switch_agent_model, toggle_agent_think,
 };
 use dialog::pick_folder;
@@ -57,6 +57,7 @@ fn main() {
             load_storage_snapshot,
             save_storage_snapshot,
             pick_folder,
+            discover_skills,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

@@ -5,6 +5,7 @@ import type {
   IflowHistorySessionRecord,
   IflowHistoryMessageRecord,
   ModelOption,
+  SkillRuntimeItem,
   StorageSnapshot,
   GitFileChange,
 } from '../types';
@@ -119,4 +120,8 @@ export function loadGitFileDiff(workspacePath: string, filePath: string): Promis
 
 export function pickFolder(defaultPath: string | null): Promise<string | null> {
   return invoke<string | null>('pick_folder', { defaultPath });
+}
+
+export function discoverSkills(agentType: string): Promise<SkillRuntimeItem[]> {
+  return invoke<SkillRuntimeItem[]>('discover_skills', { agentType });
 }

@@ -11,12 +11,23 @@ import type {
   ThemeMode,
   GitFileChange,
   SendKeyMode,
+  SkillRuntimeItem,
 } from './types';
+import {
+  isMcpSuggestionEnabled as isMcpSuggestionEnabledInMap,
+  loadCapabilityEnableSettings,
+  persistCapabilityEnableSettings,
+  setMcpSuggestionEnabled as setMcpSuggestionEnabledInMap,
+  isSkillSuggestionEnabled as isSkillSuggestionEnabledInMap,
+  setSkillSuggestionEnabled as setSkillSuggestionEnabledInMap,
+} from './features/capabilities/enables';
 
 const NOTIFICATION_DELAY_STORAGE_KEY = 'iflow-notification-delay-ms';
 const NOTIFICATION_DEFAULT_DELAY_MS = 5000;
 const NOTIFICATION_MAX_DELAY_MS = 59 * 60 * 1000 + 59 * 1000;
 const SEND_KEY_MODE_STORAGE_KEY = 'iflow-send-key-mode';
+const HISTORY_CONTINUATION_STORAGE_KEY = 'iflow-history-continuation-enabled';
+const capabilityEnableSettings = loadCapabilityEnableSettings();
 
 function normalizeSendKeyMode(rawValue: string | null): SendKeyMode {
   if (rawValue === 'mod+enter') {
@@ -32,6 +43,13 @@ function normalizeNotificationDelayMs(rawValue: string | null): number {
   }
   const normalized = Math.max(0, Math.min(NOTIFICATION_MAX_DELAY_MS, parsed));
   return normalized;
+}
+
+function normalizeHistoryContinuationEnabled(rawValue: string | null): boolean {
+  if (rawValue === '0' || rawValue === 'false') {
+    return false;
+  }
+  return true;
 }
 
 export const state = {
@@ -56,6 +74,9 @@ export const state = {
   // ── Slash 命令最近使用 ───────────────────────────────────────────────────
   recentSlashCommands: [] as string[], // 存储命令 ID，最多保留 10 个
   registryByAgent: {} as Record<string, AgentRegistry>,
+  mcpEnabledByAgent: capabilityEnableSettings.mcpEnabledByAgent,
+  skillEnabledByAgentType: capabilityEnableSettings.skillEnabledByAgentType,
+  skillRuntimeByAgentType: {} as Record<string, SkillRuntimeItem[]>,
   toolCallsByAgent: {} as Record<string, ToolCall[]>,
   modelOptionsCacheByAgent: {} as Record<string, ModelOption[]>,
   thinkSupportByModel: {} as Record<string, ThinkSupportStatus>,
@@ -92,11 +113,22 @@ export const state = {
   notificationCustomSoundName: localStorage.getItem('iflow-notification-custom-sound-name'),
   // send key mode
   sendKeyMode: normalizeSendKeyMode(localStorage.getItem(SEND_KEY_MODE_STORAGE_KEY)),
+  historyContinuationEnabled: normalizeHistoryContinuationEnabled(
+    localStorage.getItem(HISTORY_CONTINUATION_STORAGE_KEY)
+  ),
+  capabilityCenterTab: 'mcp' as 'mcp' | 'skill',
+  capabilityLoading: false,
+  capabilityErrors: {} as Record<string, string>,
 };
 
 export function setSendKeyMode(mode: SendKeyMode): void {
   localStorage.setItem(SEND_KEY_MODE_STORAGE_KEY, mode);
   state.sendKeyMode = mode;
+}
+
+export function setHistoryContinuationEnabled(enabled: boolean): void {
+  localStorage.setItem(HISTORY_CONTINUATION_STORAGE_KEY, enabled ? '1' : '0');
+  state.historyContinuationEnabled = enabled;
 }
 
 export function canUseConversationQuickAction(): boolean {
@@ -105,4 +137,40 @@ export function canUseConversationQuickAction(): boolean {
   }
   const agent = state.agents.find((item) => item.id === state.currentAgentId);
   return Boolean(agent && agent.status === 'connected' && !state.inflightSessionByAgent[agent.id]);
+}
+
+function saveCapabilityEnableSettings(): void {
+  persistCapabilityEnableSettings({
+    version: 1,
+    mcpEnabledByAgent: state.mcpEnabledByAgent,
+    skillEnabledByAgentType: state.skillEnabledByAgentType,
+    updatedAt: Date.now(),
+  });
+}
+
+export function isMcpSuggestionEnabledForAgent(agentId: string, serverName: string): boolean {
+  return isMcpSuggestionEnabledInMap(state.mcpEnabledByAgent, agentId, serverName);
+}
+
+export function setMcpSuggestionEnabledForAgent(agentId: string, serverName: string, enabled: boolean): void {
+  state.mcpEnabledByAgent = setMcpSuggestionEnabledInMap(state.mcpEnabledByAgent, agentId, serverName, enabled);
+  saveCapabilityEnableSettings();
+}
+
+export function isSkillSuggestionEnabledForAgentType(agentType: string, skillName: string): boolean {
+  return isSkillSuggestionEnabledInMap(state.skillEnabledByAgentType, agentType, skillName);
+}
+
+export function setSkillSuggestionEnabledForAgentType(
+  agentType: string,
+  skillName: string,
+  enabled: boolean
+): void {
+  state.skillEnabledByAgentType = setSkillSuggestionEnabledInMap(
+    state.skillEnabledByAgentType,
+    agentType,
+    skillName,
+    enabled
+  );
+  saveCapabilityEnableSettings();
 }

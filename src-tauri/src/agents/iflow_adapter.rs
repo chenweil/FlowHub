@@ -718,6 +718,14 @@ pub async fn message_listener_task(
                                             if let Some(error) = message_json.get("error") {
                                                 println!("[listener] session/load failed: {}", error);
                                                 if load_was_initialize {
+                                                    let _ = app_handle.emit(
+                                                        "stream-message",
+                                                        json!({
+                                                            "agentId": &agent_id,
+                                                            "content": format!("⚠️ 会话恢复失败，已回退创建新会话：{}", error),
+                                                            "type": "system",
+                                                        }),
+                                                    );
                                                     // 初始化恢复失败时，回退到创建新会话
                                                     let session_new_id = next_rpc_id(&mut rpc_id_counter);
                                                     session_new_request_id = Some(session_new_id);
@@ -733,6 +741,18 @@ pub async fn message_listener_task(
                                                         break;
                                                     }
                                                 } else if let Some(target) = load_target.as_ref() {
+                                                    let _ = app_handle.emit(
+                                                        "stream-message",
+                                                        json!({
+                                                            "agentId": &agent_id,
+                                                            "content": format!(
+                                                                "⚠️ 目标会话恢复失败（{}），将回退创建会话：{}",
+                                                                target,
+                                                                error
+                                                            ),
+                                                            "type": "system",
+                                                        }),
+                                                    );
                                                     // 指定会话恢复失败时，尝试使用自定义 sessionId 新建会话（新版 ACP 支持）
                                                     let session_new_id = next_rpc_id(&mut rpc_id_counter);
                                                     session_new_request_id = Some(session_new_id);

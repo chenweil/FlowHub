@@ -79,6 +79,10 @@
                   <span class="toolbar-menu-icon">📝</span>
                   <span class="toolbar-menu-text">文件变更</span>
                 </button>
+                <button id="open-capability-center-btn" class="toolbar-menu-item" aria-label="打开能力中心">
+                  <span class="toolbar-menu-icon">🧩</span>
+                  <span class="toolbar-menu-text">能力中心</span>
+                </button>
                 <div class="toolbar-menu-divider"></div>
                 <button id="clear-chat-btn" class="toolbar-menu-item toolbar-menu-item-danger" disabled>
                   <span class="toolbar-menu-icon">🗑️</span>
@@ -301,15 +305,89 @@
                 <option value="mod+enter">⌘+Enter (Mac) / Ctrl+Enter (Win)</option>
               </select>
             </div>
+            <label class="history-continuation-control">
+              <input id="history-continuation-enabled" type="checkbox" />
+              <span>历史会话继续时注入最近上下文</span>
+            </label>
           </div>
 
           <div class="settings-group">
             <div class="settings-group-title">外观</div>
             <button id="theme-toggle-btn" class="btn-secondary settings-theme-btn" title="跟随系统" aria-label="切换主题">主题：◑</button>
           </div>
+
+          <div class="settings-group">
+            <div class="settings-group-title">能力</div>
+            <button
+              id="open-capability-center-from-settings-btn"
+              class="btn-secondary settings-capability-link-btn"
+              type="button"
+            >
+              前往能力中心
+            </button>
+          </div>
         </div>
         <div class="modal-footer">
           <button id="close-settings-footer-btn" class="btn-primary">完成</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 能力中心弹窗 -->
+    <div
+      id="capability-center-modal"
+      class="modal hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="capability-center-modal-title"
+    >
+      <div class="modal-content capability-center-modal-content">
+        <div class="modal-header">
+          <h3 id="capability-center-modal-title">能力中心</h3>
+          <button id="close-capability-center-modal" class="btn-icon" aria-label="关闭能力中心">×</button>
+        </div>
+        <div class="modal-body capability-center-modal-body">
+          <p class="capability-center-summary">当前阶段仅管理建议列表显示，不会修改 CLI 实际加载配置。</p>
+          <div class="capability-center-tabs" role="tablist" aria-label="能力中心标签">
+            <button
+              id="capability-tab-mcp"
+              class="capability-tab active"
+              type="button"
+              role="tab"
+              aria-selected="true"
+              aria-controls="capability-panel-mcp"
+            >
+              MCP
+            </button>
+            <button
+              id="capability-tab-skill"
+              class="capability-tab"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="capability-panel-skill"
+            >
+              SKILL
+            </button>
+          </div>
+          <section id="capability-panel-mcp" class="capability-panel" role="tabpanel" aria-labelledby="capability-tab-mcp">
+            <div id="capability-mcp-agent-label" class="capability-agent-label">-</div>
+            <div id="capability-mcp-note" class="capability-note">-</div>
+            <div id="capability-mcp-list" class="capability-list"></div>
+          </section>
+          <section
+            id="capability-panel-skill"
+            class="capability-panel hidden"
+            role="tabpanel"
+            aria-labelledby="capability-tab-skill"
+          >
+            <div id="capability-skill-agent-label" class="capability-agent-label">-</div>
+            <div id="capability-skill-note" class="capability-note">-</div>
+            <div id="capability-skill-list" class="capability-list"></div>
+          </section>
+        </div>
+        <div class="modal-footer">
+          <button id="close-capability-center-footer-btn" class="btn-primary">完成</button>
         </div>
       </div>
     </div>

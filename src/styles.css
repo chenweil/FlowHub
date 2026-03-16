@@ -89,6 +89,7 @@ body {
   --token-variable: #ffa657;
   /* Slash badge colors */
   --badge-mcp: #c297ff;
+  --badge-skill: #58d4c2;
   --badge-builtin: #79c0ff;
   --badge-recent: #7ee787;
 }
@@ -158,6 +159,7 @@ body {
     --token-variable: #953800;
     /* Slash badge colors - 亮色主题适配 */
     --badge-mcp: #8250df;
+    --badge-skill: #0f766e;
     --badge-builtin: #0550ae;
     --badge-recent: #116329;
   }
@@ -232,6 +234,7 @@ body {
   --token-variable: #953800;
   /* Slash badge colors - 亮色主题适配 */
   --badge-mcp: #8250df;
+  --badge-skill: #0f766e;
   --badge-builtin: #0550ae;
   --badge-recent: #116329;
 }
@@ -2112,6 +2115,12 @@ body {
   border: 1px solid rgba(163, 113, 247, 0.3);
 }
 
+.slash-command-badge.skill {
+  background: rgba(21, 176, 162, 0.2);
+  color: var(--badge-skill);
+  border: 1px solid rgba(21, 176, 162, 0.3);
+}
+
 .slash-command-badge.builtin {
   background: rgba(47, 129, 247, 0.2);
   color: var(--badge-builtin);
@@ -2267,6 +2276,159 @@ body {
   width: min(620px, 92vw);
 }
 
+.settings-capability-link-btn {
+  align-self: flex-start;
+}
+
+.capability-center-modal-content {
+  width: min(760px, 94vw);
+  max-height: min(86vh, 760px);
+  display: flex;
+  flex-direction: column;
+}
+
+.capability-center-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+}
+
+.capability-center-summary {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.capability-center-tabs {
+  display: flex;
+  gap: 8px;
+}
+
+.capability-tab {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.capability-tab.active {
+  background: color-mix(in srgb, var(--accent-color) 15%, var(--bg-primary));
+  border-color: var(--accent-color);
+  color: var(--text-primary);
+}
+
+.capability-panel {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.capability-panel.hidden {
+  display: none;
+}
+
+.capability-agent-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.capability-note {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.capability-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.capability-item {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  padding: 10px 12px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.capability-item-main {
+  min-width: 0;
+}
+
+.capability-item-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.capability-item-desc {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.capability-item-source {
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+.capability-item-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+  flex-shrink: 0;
+}
+
+.capability-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.capability-switch input[type='checkbox'] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+
+.capability-empty {
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+}
+
 .confirm-modal-content {
   width: min(420px, 92vw);
 }
@@ -2301,6 +2463,22 @@ body {
 
 .settings-notification-controls {
   justify-content: flex-start;
+}
+
+.history-continuation-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.history-continuation-control input[type='checkbox'] {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent-color);
 }
 
 .artifact-preview-modal-content {

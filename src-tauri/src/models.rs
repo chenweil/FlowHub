@@ -81,3 +81,15 @@ pub struct ModelOption {
     pub label: String,
     pub value: String,
 }
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillRuntimeItem {
+    pub agent_type: String,
+    pub skill_name: String,
+    pub title: String,
+    pub description: String,
+    pub path: String,
+    pub source: String,
+    pub discovered_at: i64,
+}

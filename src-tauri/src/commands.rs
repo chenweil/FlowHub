@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use tauri::State;
@@ -5,7 +7,7 @@ use tokio::process::{Child, Command};
 use tokio::time::{timeout, Duration};
 
 use crate::agents::iflow_adapter::{find_available_port, message_listener_task};
-use crate::models::{AgentInfo, AgentStatus, ConnectResponse, ListenerCommand};
+use crate::models::{AgentInfo, AgentStatus, ConnectResponse, ListenerCommand, SkillRuntimeItem};
 use crate::runtime_env::{resolve_executable_path, runtime_path_env};
 use crate::state::{AgentInstance, AppState};
 
@@ -381,4 +383,201 @@ pub async fn disconnect_agent(state: State<'_, AppState>, agent_id: String) -> R
     }
 
     Ok(())
+}
+
+fn normalize_lower_text(raw: &str) -> String {
+    raw.trim().to_lowercase()
+}
+
+fn remove_wrapping_quotes(value: &str) -> String {
+    let trimmed = value.trim();
+    let bytes = trimmed.as_bytes();
+    if bytes.len() >= 2
+        && ((bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"')
+            || (bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\''))
+    {
+        return trimmed[1..trimmed.len() - 1].trim().to_string();
+    }
+    trimmed.to_string()
+}
+
+fn parse_skill_frontmatter(content: &str) -> (Option<String>, Option<String>) {
+    let mut lines = content.lines();
+    let first_line = lines.next().map(|line| line.trim()).unwrap_or_default();
+    if first_line != "---" {
+        return (None, None);
+    }
+
+    let mut name: Option<String> = None;
+    let mut description: Option<String> = None;
+
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed == "---" {
+            break;
+        }
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let Some((raw_key, raw_value)) = trimmed.split_once(':') else {
+            continue;
+        };
+        let key = normalize_lower_text(raw_key);
+        let value = remove_wrapping_quotes(raw_value);
+        if value.is_empty() {
+            continue;
+        }
+
+        if key == "name" {
+            name = Some(value);
+            continue;
+        }
+        if key == "description" {
+            description = Some(value);
+        }
+    }
+
+    (name, description)
+}
+
+fn resolve_iflow_skill_root() -> Result<PathBuf, String> {
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .ok_or_else(|| "Cannot resolve home directory".to_string())?;
+    Ok(home.join(".iflow").join("skills"))
+}
+
+fn read_iflow_skills_from_root(root: &Path) -> Result<Vec<SkillRuntimeItem>, String> {
+    if !root.exists() {
+        return Err(format!("技能目录不存在: {}", root.display()));
+    }
+    if !root.is_dir() {
+        return Err(format!("技能路径不是目录: {}", root.display()));
+    }
+
+    let mut skills: Vec<SkillRuntimeItem> = Vec::new();
+    let mut seen = HashSet::<String>::new();
+    let mut dir_entries: Vec<_> = std::fs::read_dir(root)
+        .map_err(|e| format!("读取技能目录失败: {}", e))?
+        .filter_map(|entry| entry.ok())
+        .collect();
+    dir_entries.sort_by_key(|entry| entry.file_name().to_string_lossy().to_lowercase());
+
+    for entry in dir_entries {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let skill_md_path = path.join("SKILL.md");
+        if !skill_md_path.is_file() {
+            continue;
+        }
+
+        let content = match std::fs::read_to_string(&skill_md_path) {
+            Ok(value) => value,
+            Err(err) => {
+                eprintln!("Read SKILL.md failed ({}): {}", skill_md_path.display(), err);
+                continue;
+            }
+        };
+
+        let (manifest_name, manifest_description) = parse_skill_frontmatter(&content);
+        let fallback_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        let skill_name = manifest_name
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .unwrap_or(fallback_name);
+        if skill_name.is_empty() {
+            continue;
+        }
+
+        let dedupe_key = normalize_lower_text(&skill_name);
+        if dedupe_key.is_empty() || seen.contains(&dedupe_key) {
+            continue;
+        }
+        seen.insert(dedupe_key);
+
+        skills.push(SkillRuntimeItem {
+            agent_type: "iflow".to_string(),
+            skill_name: skill_name.clone(),
+            title: skill_name,
+            description: manifest_description.unwrap_or_default(),
+            path: path.to_string_lossy().to_string(),
+            source: "iflow-cli-dir".to_string(),
+            discovered_at: chrono::Utc::now().timestamp_millis(),
+        });
+    }
+
+    Ok(skills)
+}
+
+#[tauri::command]
+pub async fn discover_skills(agent_type: String) -> Result<Vec<SkillRuntimeItem>, String> {
+    let normalized_agent_type = normalize_lower_text(&agent_type);
+    if normalized_agent_type != "iflow" {
+        return Ok(Vec::new());
+    }
+
+    let root = resolve_iflow_skill_root()?;
+    read_iflow_skills_from_root(&root)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_skill_frontmatter, read_iflow_skills_from_root};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn make_temp_dir_name(tag: &str) -> String {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        format!("iflow-workspace-{}-{}", tag, nanos)
+    }
+
+    #[test]
+    fn parse_skill_frontmatter_reads_name_and_description() {
+        let content = r#"---
+name: daily-plan
+description: "Generate daily plan"
+---
+# body
+"#;
+        let (name, description) = parse_skill_frontmatter(content);
+        assert_eq!(name.as_deref(), Some("daily-plan"));
+        assert_eq!(description.as_deref(), Some("Generate daily plan"));
+    }
+
+    #[test]
+    fn read_iflow_skills_dedupes_by_name_case_insensitive() {
+        let temp_root = std::env::temp_dir().join(make_temp_dir_name("skills"));
+        std::fs::create_dir_all(&temp_root).expect("create temp root");
+
+        let first = temp_root.join("skill-a");
+        let second = temp_root.join("skill-b");
+        std::fs::create_dir_all(&first).expect("create first dir");
+        std::fs::create_dir_all(&second).expect("create second dir");
+        std::fs::write(
+            first.join("SKILL.md"),
+            "---\nname: Daily-Plan\ndescription: first\n---\n",
+        )
+        .expect("write first skill");
+        std::fs::write(
+            second.join("SKILL.md"),
+            "---\nname: daily-plan\ndescription: second\n---\n",
+        )
+        .expect("write second skill");
+
+        let skills = read_iflow_skills_from_root(&temp_root).expect("read skills");
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].skill_name, "Daily-Plan");
+
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
 }

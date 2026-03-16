@@ -10,6 +10,7 @@ import {
 } from '../services/events';
 import {
   getVersion,
+  discoverSkills,
   sendMessage as tauriSendMessage,
   stopMessage,
   pickFolder,
@@ -18,7 +19,17 @@ import { TIMEOUTS } from '../config';
 import { generateAcpSessionId, streamTypeToRole } from '../lib/utils';
 import { escapeHtml } from '../lib/html';
 import type { Message, SlashMenuItem, ComposerState, StreamMessageType, ThemeMode, SendKeyMode } from '../types';
-import { state, canUseConversationQuickAction } from '../store';
+import {
+  state,
+  canUseConversationQuickAction,
+  isMcpSuggestionEnabledForAgent,
+  setMcpSuggestionEnabledForAgent,
+  isSkillSuggestionEnabledForAgentType,
+  setSkillSuggestionEnabledForAgentType,
+  setHistoryContinuationEnabled,
+} from '../store';
+import { buildMcpCapabilityViewModel } from './capabilities/mcpViewModel';
+import { buildSkillCapabilityViewModel } from './capabilities/skillViewModel';
 import {
   addAgentBtnEl,
   agentListEl,
@@ -42,6 +53,7 @@ import {
   toggleThinkBtnEl,
   openToolCallsBtnEl,
   openGitChangesBtnEl,
+  openCapabilityCenterBtnEl,
   toolCallsPanelEl,
   toolCallsListEl,
   closeToolPanelBtnEl,
@@ -61,6 +73,20 @@ import {
   settingsModalEl,
   closeSettingsModalBtnEl,
   closeSettingsFooterBtnEl,
+  openCapabilityCenterFromSettingsBtnEl,
+  capabilityCenterModalEl,
+  closeCapabilityCenterModalBtnEl,
+  closeCapabilityCenterFooterBtnEl,
+  capabilityTabMcpBtnEl,
+  capabilityTabSkillBtnEl,
+  capabilityPanelMcpEl,
+  capabilityPanelSkillEl,
+  capabilityMcpAgentLabelEl,
+  capabilityMcpNoteEl,
+  capabilityMcpListEl,
+  capabilitySkillAgentLabelEl,
+  capabilitySkillNoteEl,
+  capabilitySkillListEl,
   themeToggleBtnEl,
   autoReconnectModeSelectEl,
   notificationSoundSelectEl,
@@ -69,6 +95,7 @@ import {
   notificationSoundUploadBtnEl,
   notificationSoundUploadInputEl,
   sendKeyModeSelectEl,
+  historyContinuationEnabledEl,
   appVersionEl,
   toolbarMoreBtnEl,
   toolbarMoreMenuEl,
@@ -130,6 +157,8 @@ import {
   onGitChangesClick,
 } from './ui';
 import { canCompressContext } from '../lib/contextCompression';
+import { clearMessageWatchdog, resetMessageWatchdog } from './messageWatchdog';
+import { buildHistoryContinuationPrompt } from './historyContinuation';
 
 const SEND_BUTTON_SEND_ICON = `
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -231,6 +260,12 @@ const AUTO_RECONNECT_MODE_LABELS: Record<AutoReconnectMode, string> = {
   all: '全部',
   off: '关闭',
 };
+const CAPABILITY_AGENT_STATUS_LABELS: Record<'connected' | 'disconnected' | 'connecting' | 'error', string> = {
+  connected: '在线',
+  disconnected: '离线',
+  connecting: '连接中',
+  error: '异常',
+};
 
 function setupAutoReconnectModeSelector() {
   const mode = getAutoReconnectMode();
@@ -260,6 +295,263 @@ function showSettingsModal() {
 
 function hideSettingsModal() {
   settingsModalEl.classList.add('hidden');
+}
+
+function getCurrentAgent() {
+  if (!state.currentAgentId) {
+    return null;
+  }
+  return state.agents.find((item) => item.id === state.currentAgentId) || null;
+}
+
+function normalizeAgentType(rawType: string | null | undefined): string {
+  return (rawType || '').trim().toLowerCase();
+}
+
+async function refreshSkillsForCurrentAgentType(force = false) {
+  const currentAgent = getCurrentAgent();
+  const agentType = normalizeAgentType(currentAgent?.type);
+  if (!agentType) {
+    return;
+  }
+  if (agentType !== 'iflow') {
+    return;
+  }
+  const hasCachedSkills = (state.skillRuntimeByAgentType[agentType] || []).length > 0;
+  if (!force && hasCachedSkills) {
+    return;
+  }
+
+  state.capabilityLoading = true;
+  delete state.capabilityErrors.skill;
+  renderCapabilityCenterIfVisible();
+
+  try {
+    const skills = await discoverSkills(agentType);
+    state.skillRuntimeByAgentType[agentType] = skills;
+  } catch (error) {
+    console.error('Discover skills failed:', error);
+    state.skillRuntimeByAgentType[agentType] = [];
+    state.capabilityErrors.skill = String(error);
+  } finally {
+    state.capabilityLoading = false;
+    updateSlashCommandMenu();
+    renderCapabilityCenterIfVisible();
+  }
+}
+
+function renderCapabilityCenterTabs() {
+  const isMcpTab = state.capabilityCenterTab === 'mcp';
+  capabilityTabMcpBtnEl.classList.toggle('active', isMcpTab);
+  capabilityTabMcpBtnEl.setAttribute('aria-selected', isMcpTab ? 'true' : 'false');
+  capabilityTabSkillBtnEl.classList.toggle('active', !isMcpTab);
+  capabilityTabSkillBtnEl.setAttribute('aria-selected', isMcpTab ? 'false' : 'true');
+  capabilityPanelMcpEl.classList.toggle('hidden', !isMcpTab);
+  capabilityPanelSkillEl.classList.toggle('hidden', isMcpTab);
+}
+
+function renderCapabilityCenterMcpPanel() {
+  const viewModel = buildMcpCapabilityViewModel({
+    currentAgentId: state.currentAgentId,
+    agents: state.agents,
+    registryByAgent: state.registryByAgent,
+    mcpEnabledByAgent: state.mcpEnabledByAgent,
+  });
+  const statusLabel = viewModel.agentStatus ? CAPABILITY_AGENT_STATUS_LABELS[viewModel.agentStatus] : '-';
+  capabilityMcpAgentLabelEl.textContent = `Agent：${viewModel.agentName}（${statusLabel}）`;
+
+  if (viewModel.state === 'no-agent') {
+    capabilityMcpNoteEl.textContent = '请选择 Agent 后查看当前运行时 MCP 列表。';
+    capabilityMcpListEl.innerHTML = '<div class="capability-empty">尚未选择 Agent。</div>';
+    return;
+  }
+
+  if (viewModel.state === 'offline') {
+    capabilityMcpNoteEl.textContent =
+      '当前 Agent 离线，列表为上次已知运行时数据（只读展示，不代表当前实时可用）。';
+  } else if (viewModel.state === 'empty') {
+    capabilityMcpNoteEl.textContent = '当前 Agent 已连接，但尚未收到 MCP 运行时注册信息。';
+  } else {
+    capabilityMcpNoteEl.textContent = '以下列表来自运行时注册信息（只读展示，不修改 CLI 实际加载配置）。';
+  }
+
+  if (viewModel.servers.length === 0) {
+    capabilityMcpListEl.innerHTML = '<div class="capability-empty">暂无 MCP 条目。</div>';
+    return;
+  }
+
+  capabilityMcpListEl.innerHTML = viewModel.servers
+    .map((entry) => {
+      const desc = entry.description?.trim() ? entry.description : '无描述';
+      const sourceLabel = viewModel.isReadOnlySnapshot ? '离线快照' : 'runtime';
+      const checked = entry.suggestionEnabled ? 'checked' : '';
+      return `
+        <div class="capability-item">
+          <div class="capability-item-main">
+            <div class="capability-item-title">${escapeHtml(entry.name)}</div>
+            <div class="capability-item-desc">${escapeHtml(desc)}</div>
+          </div>
+          <div class="capability-item-actions">
+            <label class="capability-switch">
+              <input
+                type="checkbox"
+                data-capability-mcp-toggle="true"
+                data-server-name="${escapeHtml(entry.name)}"
+                ${checked}
+              />
+              <span>建议显示</span>
+            </label>
+            <span class="capability-item-source">${escapeHtml(sourceLabel)}</span>
+          </div>
+        </div>
+      `;
+    })
+    .join('');
+}
+
+function renderCapabilityCenterSkillPanel() {
+  const currentAgent = getCurrentAgent();
+  if (!currentAgent) {
+    capabilitySkillAgentLabelEl.textContent = 'Agent：未选择';
+    capabilitySkillNoteEl.textContent = '请选择 Agent 后查看 Skill 列表。';
+    capabilitySkillListEl.innerHTML = '<div class="capability-empty">尚未选择 Agent。</div>';
+    return;
+  }
+
+  const agentType = normalizeAgentType(currentAgent.type);
+  capabilitySkillAgentLabelEl.textContent = `Agent：${currentAgent.name}（类型：${agentType || '-' }）`;
+
+  const viewModel = buildSkillCapabilityViewModel({
+    agentType,
+    skillRuntimeByAgentType: state.skillRuntimeByAgentType,
+    skillEnabledByAgentType: state.skillEnabledByAgentType,
+    loading: state.capabilityLoading,
+    errorMessage: state.capabilityErrors.skill || '',
+  });
+
+  if (viewModel.state === 'unsupported') {
+    capabilitySkillNoteEl.textContent = '当前仅支持 iflow 类型 Agent 的技能扫描。';
+    capabilitySkillListEl.innerHTML = '<div class="capability-empty">当前 Agent 类型暂不支持 Skill 管理。</div>';
+    return;
+  }
+  if (viewModel.state === 'loading') {
+    capabilitySkillNoteEl.textContent = '正在扫描 ~/.iflow/skills ...';
+    capabilitySkillListEl.innerHTML = '<div class="capability-empty">加载中...</div>';
+    return;
+  }
+  if (viewModel.state === 'error') {
+    capabilitySkillNoteEl.textContent = `扫描失败：${viewModel.errorMessage}`;
+    capabilitySkillListEl.innerHTML = '<div class="capability-empty">无法读取 Skill 列表，请检查目录与权限。</div>';
+    return;
+  }
+  if (viewModel.state === 'empty') {
+    capabilitySkillNoteEl.textContent = '未发现 Skill，目录：~/.iflow/skills';
+    capabilitySkillListEl.innerHTML = '<div class="capability-empty">暂无 Skill 条目。</div>';
+    return;
+  }
+
+  capabilitySkillNoteEl.textContent = '以下开关仅影响建议列表显示，对所有 iflow Agent 生效。';
+  capabilitySkillListEl.innerHTML = viewModel.skills
+    .map((entry) => {
+      const desc = entry.description?.trim() ? entry.description : '无描述';
+      const checked = entry.suggestionEnabled ? 'checked' : '';
+      return `
+        <div class="capability-item">
+          <div class="capability-item-main">
+            <div class="capability-item-title">${escapeHtml(entry.title || entry.skillName)}</div>
+            <div class="capability-item-desc">${escapeHtml(desc)}\n路径：${escapeHtml(entry.path)}</div>
+          </div>
+          <div class="capability-item-actions">
+            <label class="capability-switch">
+              <input
+                type="checkbox"
+                data-capability-skill-toggle="true"
+                data-skill-name="${escapeHtml(entry.skillName)}"
+                data-agent-type="${escapeHtml(agentType)}"
+                ${checked}
+              />
+              <span>建议显示</span>
+            </label>
+            <span class="capability-item-source">iflow</span>
+          </div>
+        </div>
+      `;
+    })
+    .join('');
+}
+
+function renderCapabilityCenter() {
+  renderCapabilityCenterTabs();
+  renderCapabilityCenterMcpPanel();
+  renderCapabilityCenterSkillPanel();
+}
+
+function renderCapabilityCenterIfVisible() {
+  if (capabilityCenterModalEl.classList.contains('hidden')) {
+    return;
+  }
+  renderCapabilityCenter();
+}
+
+function showCapabilityCenterModal() {
+  renderCapabilityCenter();
+  capabilityCenterModalEl.classList.remove('hidden');
+  void refreshSkillsForCurrentAgentType(false);
+}
+
+function hideCapabilityCenterModal() {
+  capabilityCenterModalEl.classList.add('hidden');
+}
+
+function switchCapabilityCenterTab(tab: 'mcp' | 'skill') {
+  if (state.capabilityCenterTab === tab) {
+    return;
+  }
+  state.capabilityCenterTab = tab;
+  renderCapabilityCenter();
+  if (tab === 'skill') {
+    void refreshSkillsForCurrentAgentType(false);
+  }
+}
+
+function onCapabilityMcpToggleChange(event: Event) {
+  const target = event.target as HTMLInputElement;
+  if (!target || target.type !== 'checkbox') {
+    return;
+  }
+  if (target.dataset.capabilityMcpToggle !== 'true') {
+    return;
+  }
+  if (!state.currentAgentId) {
+    return;
+  }
+  const serverName = target.dataset.serverName?.trim();
+  if (!serverName) {
+    return;
+  }
+
+  setMcpSuggestionEnabledForAgent(state.currentAgentId, serverName, target.checked);
+  updateSlashCommandMenu();
+  renderCapabilityCenterMcpPanel();
+}
+
+function onCapabilitySkillToggleChange(event: Event) {
+  const target = event.target as HTMLInputElement;
+  if (!target || target.type !== 'checkbox') {
+    return;
+  }
+  if (target.dataset.capabilitySkillToggle !== 'true') {
+    return;
+  }
+  const skillName = target.dataset.skillName?.trim();
+  const agentType = normalizeAgentType(target.dataset.agentType);
+  if (!agentType || !skillName) {
+    return;
+  }
+
+  setSkillSuggestionEnabledForAgentType(agentType, skillName, target.checked);
+  updateSlashCommandMenu();
+  renderCapabilityCenterSkillPanel();
 }
 
 function normalizeNotificationDelayMs(delayMs: number | null | undefined): number {
@@ -353,6 +645,15 @@ function initializeSendKeyMode() {
   const mode: SendKeyMode = savedMode === 'mod+enter' ? 'mod+enter' : 'enter';
   state.sendKeyMode = mode;
   sendKeyModeSelectEl.value = mode;
+}
+
+function applyHistoryContinuationSelection(enabled: boolean) {
+  setHistoryContinuationEnabled(enabled);
+  historyContinuationEnabledEl.checked = state.historyContinuationEnabled;
+}
+
+function setupHistoryContinuationToggle() {
+  historyContinuationEnabledEl.checked = state.historyContinuationEnabled;
 }
 
 function isModKeyPressed(event: KeyboardEvent): boolean {
@@ -522,6 +823,7 @@ export function setComposerState(state: ComposerState, hint: string) {
 }
 
 export function refreshComposerState() {
+  renderCapabilityCenterIfVisible();
   const currentAgent = state.currentAgentId ? state.agents.find((agent) => agent.id === state.currentAgentId) : null;
   const isConnected = currentAgent?.status === 'connected';
   const hasSession = Boolean(state.currentSessionId);
@@ -567,9 +869,11 @@ export function setupTauriEventListeners() {
       return;
     }
 
-    if (payload.agentId === state.currentAgentId && state.messageTimeout) {
-      clearTimeout(state.messageTimeout);
-      state.messageTimeout = null;
+    if (payload.agentId === state.currentAgentId) {
+      const inflightSessionId = state.inflightSessionByAgent[payload.agentId];
+      if (inflightSessionId) {
+        scheduleMessageTimeoutWatchdog(payload.agentId, inflightSessionId);
+      }
     }
 
     const targetSessionId =
@@ -595,6 +899,9 @@ export function setupTauriEventListeners() {
     }
 
     applyAgentRegistry(payload.agentId, payload.commands, payload.mcpServers);
+    if (payload.agentId === state.currentAgentId) {
+      renderCapabilityCenterIfVisible();
+    }
   });
 
   onModelRegistry((payload) => {
@@ -623,10 +930,7 @@ export function setupTauriEventListeners() {
     }
 
     if (payload.agentId === state.currentAgentId) {
-      if (state.messageTimeout) {
-        clearTimeout(state.messageTimeout);
-        state.messageTimeout = null;
-      }
+      clearMessageWatchdog(state);
 
       state.messages = state.messages.filter((m) => !m.id.includes('-sending') && !m.id.includes('-processing'));
       renderMessages();
@@ -652,6 +956,7 @@ export function setupTauriEventListeners() {
     if (payload.agentId && payload.agentId !== state.currentAgentId) {
       return;
     }
+    clearMessageWatchdog(state);
     showError(`错误: ${payload.error || '未知错误'}`);
     refreshComposerState();
   });
@@ -732,7 +1037,11 @@ export function getSlashQueryFromInput(): string | null {
 export function buildSlashMenuItemsForCurrentAgent(): SlashMenuItem[] {
   const items: SlashMenuItem[] = [];
   const seen = new Set<string>();
-  const currentRegistry = state.currentAgentId ? state.registryByAgent[state.currentAgentId] : undefined;
+  const currentAgentId = state.currentAgentId;
+  const currentRegistry = currentAgentId ? state.registryByAgent[currentAgentId] : undefined;
+  const currentAgent = currentAgentId ? state.agents.find((item) => item.id === currentAgentId) : null;
+  const currentAgentType = normalizeAgentType(currentAgent?.type);
+  const currentSkillItems = currentAgentType ? state.skillRuntimeByAgentType[currentAgentType] || [] : [];
 
   const pushUnique = (item: SlashMenuItem) => {
     const dedupeKey = item.insertText.toLowerCase();
@@ -757,6 +1066,12 @@ export function buildSlashMenuItemsForCurrentAgent(): SlashMenuItem[] {
   });
 
   currentRegistry?.mcpServers.forEach((entry, index) => {
+    if (!currentAgentId) {
+      return;
+    }
+    if (!isMcpSuggestionEnabledForAgent(currentAgentId, entry.name)) {
+      return;
+    }
     const commandText = `/mcp get ${entry.name}`;
     const description = entry.description || `查看 MCP 服务 ${entry.name}`;
     pushUnique({
@@ -767,6 +1082,23 @@ export function buildSlashMenuItemsForCurrentAgent(): SlashMenuItem[] {
       hint: 'mcp',
       category: 'mcp',
       searchable: `${commandText} ${entry.name} ${description}`.toLowerCase(),
+    });
+  });
+
+  currentSkillItems.forEach((entry, index) => {
+    if (!isSkillSuggestionEnabledForAgentType(currentAgentType, entry.skillName)) {
+      return;
+    }
+    const commandText = `/skill ${entry.skillName}`;
+    const description = entry.description || `使用 Skill：${entry.title || entry.skillName}`;
+    pushUnique({
+      id: `skill-${index}-${entry.skillName}`,
+      label: commandText,
+      insertText: commandText,
+      description,
+      hint: 'skill',
+      category: 'skill',
+      searchable: `${commandText} ${entry.skillName} ${entry.title} ${description}`.toLowerCase(),
     });
   });
 
@@ -848,6 +1180,8 @@ export function updateSlashCommandMenu() {
       let categoryBadge = '';
       if (item.category === 'mcp') {
         categoryBadge = '<span class="slash-command-badge mcp">MCP</span>';
+      } else if (item.category === 'skill') {
+        categoryBadge = '<span class="slash-command-badge skill">SKILL</span>';
       } else if (item.category === 'builtin') {
         categoryBadge = '<span class="slash-command-badge builtin">内置</span>';
       }
@@ -987,9 +1321,13 @@ export function setupEventListeners() {
   setupNotificationSoundSelector();
   setupNotificationDelayInputs();
   setupSendKeyMode();
+  setupHistoryContinuationToggle();
 
   sendKeyModeSelectEl.addEventListener('change', () => {
     applySendKeyModeSelection(sendKeyModeSelectEl.value as SendKeyMode);
+  });
+  historyContinuationEnabledEl.addEventListener('change', () => {
+    applyHistoryContinuationSelection(historyContinuationEnabledEl.checked);
   });
 
   themeToggleBtnEl.addEventListener('click', () => {
@@ -1028,6 +1366,10 @@ export function setupEventListeners() {
     void refreshCurrentAgentGitChanges();
     toolbarMoreMenuEl.classList.add('hidden');
   });
+  openCapabilityCenterBtnEl.addEventListener('click', () => {
+    toolbarMoreMenuEl.classList.add('hidden');
+    showCapabilityCenterModal();
+  });
   
   // Toolbar more menu
   toolbarMoreBtnEl.addEventListener('click', (e) => {
@@ -1054,6 +1396,20 @@ export function setupEventListeners() {
   openSettingsBtnEl.addEventListener('click', showSettingsModal);
   closeSettingsModalBtnEl.addEventListener('click', hideSettingsModal);
   closeSettingsFooterBtnEl.addEventListener('click', hideSettingsModal);
+  openCapabilityCenterFromSettingsBtnEl.addEventListener('click', () => {
+    hideSettingsModal();
+    showCapabilityCenterModal();
+  });
+  closeCapabilityCenterModalBtnEl.addEventListener('click', hideCapabilityCenterModal);
+  closeCapabilityCenterFooterBtnEl.addEventListener('click', hideCapabilityCenterModal);
+  capabilityTabMcpBtnEl.addEventListener('click', () => {
+    switchCapabilityCenterTab('mcp');
+  });
+  capabilityTabSkillBtnEl.addEventListener('click', () => {
+    switchCapabilityCenterTab('skill');
+  });
+  capabilityMcpListEl.addEventListener('change', onCapabilityMcpToggleChange);
+  capabilitySkillListEl.addEventListener('change', onCapabilitySkillToggleChange);
 
   closeModalBtnEl.addEventListener('click', hideModal);
   cancelAddAgentBtnEl.addEventListener('click', hideModal);
@@ -1072,6 +1428,11 @@ export function setupEventListeners() {
   settingsModalEl.addEventListener('click', (event) => {
     if (event.target === settingsModalEl) {
       hideSettingsModal();
+    }
+  });
+  capabilityCenterModalEl.addEventListener('click', (event) => {
+    if (event.target === capabilityCenterModalEl) {
+      hideCapabilityCenterModal();
     }
   });
   document.addEventListener('keydown', (event) => {
@@ -1100,6 +1461,10 @@ export function setupEventListeners() {
     }
     if (!artifactPreviewModalEl.classList.contains('hidden')) {
       closeArtifactPreviewModal();
+      return;
+    }
+    if (!capabilityCenterModalEl.classList.contains('hidden')) {
+      hideCapabilityCenterModal();
       return;
     }
     if (!settingsModalEl.classList.contains('hidden')) {
@@ -1253,7 +1618,7 @@ export function setupEventListeners() {
       }
 
       const agent = state.currentAgentId
-        ? state.agents.find((a) => a.id === state.currentAgentId)
+        ? (state.agents.find((a) => a.id === state.currentAgentId) || null)
         : null;
       const currentSession = state.currentAgentId && state.currentSessionId
         ? (state.sessionsByAgent[state.currentAgentId] || []).find(
@@ -1295,7 +1660,11 @@ export function setupEventListeners() {
     void onCurrentAgentModelMenuClick(event);
   });
   document.addEventListener('click', onDocumentClick);
-  agentListEl.addEventListener('click', onAgentListClick);
+  agentListEl.addEventListener('click', (event) => {
+    onAgentListClick(event);
+    void refreshSkillsForCurrentAgentType(false);
+    renderCapabilityCenterIfVisible();
+  });
   sessionListEl.addEventListener('click', onSessionListClick);
 
   newSessionBtnEl.addEventListener('click', startNewSession);
@@ -1313,6 +1682,8 @@ export function setupEventListeners() {
   clearAllSessionsBtnEl.addEventListener('click', () => {
     void clearCurrentAgentSessions();
   });
+
+  void refreshSkillsForCurrentAgentType(false);
 }
 
 export function hideModal() {
@@ -1445,6 +1816,24 @@ function addToInputHistory(content: string) {
 // 发送消息
 const MESSAGE_TIMEOUT_MS = TIMEOUTS.messageSend;
 
+function scheduleMessageTimeoutWatchdog(requestAgentId: string, requestSessionId: string): void {
+  resetMessageWatchdog(state, requestAgentId, requestSessionId, MESSAGE_TIMEOUT_MS, () => {
+    const timeoutMessage: Message = {
+      id: `msg-${Date.now()}-timeout`,
+      role: 'system',
+      content:
+        '⏱️ 响应超时（60秒）。可能原因：\n1. iFlow 正在处理复杂任务\n2. 连接已断开\n3. iFlow 服务异常\n\n你可以：\n- 等待更长时间\n- 检查 iFlow 状态\n- 重新连接 Agent',
+      timestamp: new Date(),
+    };
+    state.messages.push(timeoutMessage);
+    renderMessages();
+
+    delete state.inflightSessionByAgent[requestAgentId];
+    refreshComposerState();
+    showError('响应超时，请检查连接状态');
+  });
+}
+
 export async function sendMessage() {
   const content = messageInputEl.value.trim();
   const requestAgentId = state.currentAgentId;
@@ -1497,6 +1886,9 @@ export async function sendMessage() {
     showError('当前 Agent 离线，仅支持本地命令。可输入 /agents autoreconnect 重连。');
     return;
   }
+  const targetSession = findSessionById(requestSessionId);
+  const historyMessagesBeforeSend =
+    targetSession?.source === 'iflow-log' ? getMessagesForSession(requestSessionId) : [];
 
   resetToolCallsForAgent(requestAgentId);
 
@@ -1531,12 +1923,19 @@ export async function sendMessage() {
   refreshComposerState();
 
   try {
-    const targetSession = findSessionById(requestSessionId);
     if (targetSession && targetSession.source !== 'iflow-log' && !targetSession.acpSessionId) {
       targetSession.acpSessionId = generateAcpSessionId();
       void saveSessions();
     }
-    await tauriSendMessage(requestAgentId, content, targetSession?.acpSessionId || null);
+    const outboundContent =
+      targetSession?.source === 'iflow-log' && state.historyContinuationEnabled
+        ? buildHistoryContinuationPrompt(historyMessagesBeforeSend, content)
+        : content;
+    // 历史会话 (iflow-log) 的 acpSessionId 来自日志文件，不是当前运行时 session
+    // 应该发送 null 让后端创建新 session，而不是尝试加载不存在的 session
+    const outboundSessionId =
+      targetSession?.source === 'iflow-log' ? null : targetSession?.acpSessionId || null;
+    await tauriSendMessage(requestAgentId, outboundContent, outboundSessionId);
 
     state.messages = state.messages.filter((m) => m.id !== sendingMessage.id);
     renderMessages();
@@ -1545,24 +1944,7 @@ export async function sendMessage() {
       return;
     }
 
-    state.messageTimeout = window.setTimeout(() => {
-      if (state.inflightSessionByAgent[requestAgentId] !== requestSessionId) {
-        return;
-      }
-      const timeoutMessage: Message = {
-        id: `msg-${Date.now()}-timeout`,
-        role: 'system',
-        content:
-          '⏱️ 响应超时（60秒）。可能原因：\n1. iFlow 正在处理复杂任务\n2. 连接已断开\n3. iFlow 服务异常\n\n你可以：\n- 等待更长时间\n- 检查 iFlow 状态\n- 重新连接 Agent',
-        timestamp: new Date(),
-      };
-      state.messages.push(timeoutMessage);
-      renderMessages();
-
-      delete state.inflightSessionByAgent[requestAgentId];
-      refreshComposerState();
-      showError('响应超时，请检查连接状态');
-    }, MESSAGE_TIMEOUT_MS);
+    scheduleMessageTimeoutWatchdog(requestAgentId, requestSessionId);
   } catch (error) {
     state.messages = state.messages.filter((m) => m.id !== sendingMessage.id);
     renderMessages();
@@ -1583,10 +1965,7 @@ export async function stopCurrentMessage() {
     return;
   }
 
-  if (state.messageTimeout) {
-    clearTimeout(state.messageTimeout);
-    state.messageTimeout = null;
-  }
+  clearMessageWatchdog(state);
 
   delete state.inflightSessionByAgent[requestAgentId];
   state.messages = state.messages.filter((m) => !m.id.includes('-sending') && !m.id.includes('-processing'));
@@ -1631,6 +2010,7 @@ async function sendCompressToCurrentSession() {
   try {
     // 发送 null session ID，让 adapter 使用当前 session，避免 session switch
     await tauriSendMessage(agentId, '/compress', null);
+    scheduleMessageTimeoutWatchdog(agentId, sessionId);
   } catch (error) {
     showError(`压缩失败: ${String(error)}`);
     delete state.inflightSessionByAgent[agentId];

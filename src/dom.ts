@@ -31,6 +31,9 @@ export const currentAgentModelMenuEl = document.getElementById('current-agent-mo
 export const toggleThinkBtnEl = document.getElementById('toggle-think-btn') as HTMLButtonElement;
 export const openToolCallsBtnEl = document.getElementById('open-tool-calls-btn') as HTMLButtonElement;
 export const openGitChangesBtnEl = document.getElementById('open-git-changes-btn') as HTMLButtonElement;
+export const openCapabilityCenterBtnEl = document.getElementById(
+  'open-capability-center-btn'
+) as HTMLButtonElement;
 export const toolCallsPanelEl = document.getElementById('tool-calls-panel') as HTMLDivElement;
 export const toolCallsListEl = document.getElementById('tool-calls-list') as HTMLDivElement;
 export const closeToolPanelBtnEl = document.getElementById('close-tool-panel') as HTMLButtonElement;
@@ -63,6 +66,32 @@ export const closeSettingsModalBtnEl = document.getElementById(
 export const closeSettingsFooterBtnEl = document.getElementById(
   'close-settings-footer-btn'
 ) as HTMLButtonElement;
+export const openCapabilityCenterFromSettingsBtnEl = document.getElementById(
+  'open-capability-center-from-settings-btn'
+) as HTMLButtonElement;
+export const capabilityCenterModalEl = document.getElementById(
+  'capability-center-modal'
+) as HTMLDivElement;
+export const closeCapabilityCenterModalBtnEl = document.getElementById(
+  'close-capability-center-modal'
+) as HTMLButtonElement;
+export const closeCapabilityCenterFooterBtnEl = document.getElementById(
+  'close-capability-center-footer-btn'
+) as HTMLButtonElement;
+export const capabilityTabMcpBtnEl = document.getElementById('capability-tab-mcp') as HTMLButtonElement;
+export const capabilityTabSkillBtnEl = document.getElementById('capability-tab-skill') as HTMLButtonElement;
+export const capabilityPanelMcpEl = document.getElementById('capability-panel-mcp') as HTMLDivElement;
+export const capabilityPanelSkillEl = document.getElementById('capability-panel-skill') as HTMLDivElement;
+export const capabilityMcpAgentLabelEl = document.getElementById(
+  'capability-mcp-agent-label'
+) as HTMLDivElement;
+export const capabilityMcpNoteEl = document.getElementById('capability-mcp-note') as HTMLDivElement;
+export const capabilityMcpListEl = document.getElementById('capability-mcp-list') as HTMLDivElement;
+export const capabilitySkillAgentLabelEl = document.getElementById(
+  'capability-skill-agent-label'
+) as HTMLDivElement;
+export const capabilitySkillNoteEl = document.getElementById('capability-skill-note') as HTMLDivElement;
+export const capabilitySkillListEl = document.getElementById('capability-skill-list') as HTMLDivElement;
 export const themeToggleBtnEl = document.getElementById('theme-toggle-btn') as HTMLButtonElement;
 export const autoReconnectModeSelectEl = document.getElementById(
   'auto-reconnect-mode-select'
@@ -83,6 +112,9 @@ export const notificationSoundUploadInputEl = document.getElementById(
 export const sendKeyModeSelectEl = document.getElementById(
   'send-key-mode-select'
 ) as HTMLSelectElement;
+export const historyContinuationEnabledEl = document.getElementById(
+  'history-continuation-enabled'
+) as HTMLInputElement;
 export const appVersionEl = document.getElementById('app-version') as HTMLDivElement;
 
 // Confirm modal

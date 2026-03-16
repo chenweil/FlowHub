@@ -70,6 +70,16 @@ export interface RegistryMcpServer {
   description: string;
 }
 
+export interface SkillRuntimeItem {
+  agentType: string;
+  skillName: string;
+  title: string;
+  description: string;
+  path: string;
+  source: 'iflow-cli-dir';
+  discoveredAt: number;
+}
+
 export interface ModelOption {
   label: string;
   value: string;
@@ -88,7 +98,7 @@ export interface SlashMenuItem {
   insertText: string;
   description: string;
   hint: string;
-  category: 'command' | 'mcp' | 'builtin';
+  category: 'command' | 'mcp' | 'skill' | 'builtin';
   searchable: string;
 }
 
