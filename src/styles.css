@@ -2306,6 +2306,30 @@ body {
   gap: 8px;
 }
 
+.capability-search-row {
+  display: flex;
+  gap: 8px;
+}
+
+.capability-search-input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+}
+
+.capability-search-input::placeholder {
+  color: var(--text-muted);
+}
+
+.capability-search-input:focus {
+  border-color: var(--accent-color);
+}
+
 .capability-tab {
   border: 1px solid var(--border-color);
   border-radius: 8px;

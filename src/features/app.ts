@@ -79,6 +79,7 @@ import {
   closeCapabilityCenterFooterBtnEl,
   capabilityTabMcpBtnEl,
   capabilityTabSkillBtnEl,
+  capabilitySearchInputEl,
   capabilityPanelMcpEl,
   capabilityPanelSkillEl,
   capabilityMcpAgentLabelEl,
@@ -251,6 +252,8 @@ const NOTIFICATION_BUILTIN_SOUND_OPTIONS: ReadonlyArray<NotificationSoundOption>
 const notificationAudioEl = new Audio();
 notificationAudioEl.preload = 'auto';
 let notificationSoundTimerId: number | null = null;
+let messageHardTimeoutId: number | null = null;
+let messageInactivityNotice: { agentId: string; sessionId: string; messageId: string } | null = null;
 
 // IME composition state tracking (more reliable than e.isComposing)
 let isComposing = false;
@@ -380,7 +383,21 @@ function renderCapabilityCenterMcpPanel() {
     return;
   }
 
-  capabilityMcpListEl.innerHTML = viewModel.servers
+  const searchQuery = state.capabilitySearchQuery.trim().toLowerCase();
+  const filteredServers = searchQuery
+    ? viewModel.servers.filter(
+        (entry) =>
+          entry.name.toLowerCase().includes(searchQuery) ||
+          (entry.description || '').toLowerCase().includes(searchQuery)
+      )
+    : viewModel.servers;
+
+  if (filteredServers.length === 0) {
+    capabilityMcpListEl.innerHTML = '<div class="capability-empty">未找到匹配的 MCP。</div>';
+    return;
+  }
+
+  capabilityMcpListEl.innerHTML = filteredServers
     .map((entry) => {
       const desc = entry.description?.trim() ? entry.description : '无描述';
       const sourceLabel = viewModel.isReadOnlySnapshot ? '离线快照' : 'runtime';
@@ -451,7 +468,22 @@ function renderCapabilityCenterSkillPanel() {
   }
 
   capabilitySkillNoteEl.textContent = '以下开关仅影响建议列表显示，对所有 iflow Agent 生效。';
-  capabilitySkillListEl.innerHTML = viewModel.skills
+
+  const searchQuery = state.capabilitySearchQuery.trim().toLowerCase();
+  const filteredSkills = searchQuery
+    ? viewModel.skills.filter(
+        (entry) =>
+          (entry.title || entry.skillName).toLowerCase().includes(searchQuery) ||
+          (entry.description || '').toLowerCase().includes(searchQuery)
+      )
+    : viewModel.skills;
+
+  if (filteredSkills.length === 0) {
+    capabilitySkillListEl.innerHTML = '<div class="capability-empty">未找到匹配的 Skill。</div>';
+    return;
+  }
+
+  capabilitySkillListEl.innerHTML = filteredSkills
     .map((entry) => {
       const desc = entry.description?.trim() ? entry.description : '无描述';
       const checked = entry.suggestionEnabled ? 'checked' : '';
@@ -501,6 +533,9 @@ function showCapabilityCenterModal() {
 
 function hideCapabilityCenterModal() {
   capabilityCenterModalEl.classList.add('hidden');
+  // 清空搜索状态
+  state.capabilitySearchQuery = '';
+  capabilitySearchInputEl.value = '';
 }
 
 function switchCapabilityCenterTab(tab: 'mcp' | 'skill') {
@@ -872,6 +907,7 @@ export function setupTauriEventListeners() {
     if (payload.agentId === state.currentAgentId) {
       const inflightSessionId = state.inflightSessionByAgent[payload.agentId];
       if (inflightSessionId) {
+        dismissMessageInactivityNotice(payload.agentId, inflightSessionId);
         scheduleMessageTimeoutWatchdog(payload.agentId, inflightSessionId);
       }
     }
@@ -889,6 +925,13 @@ export function setupTauriEventListeners() {
 
   onToolCall((payload) => {
     if (payload.agentId && Array.isArray(payload.toolCalls)) {
+      if (payload.agentId === state.currentAgentId) {
+        const inflightSessionId = state.inflightSessionByAgent[payload.agentId];
+        if (inflightSessionId) {
+          dismissMessageInactivityNotice(payload.agentId, inflightSessionId);
+          scheduleMessageTimeoutWatchdog(payload.agentId, inflightSessionId);
+        }
+      }
       mergeToolCalls(payload.agentId, payload.toolCalls);
     }
   });
@@ -931,6 +974,8 @@ export function setupTauriEventListeners() {
 
     if (payload.agentId === state.currentAgentId) {
       clearMessageWatchdog(state);
+      clearMessageHardTimeout();
+      dismissMessageInactivityNotice(payload.agentId, targetSessionId || state.currentSessionId || undefined);
 
       state.messages = state.messages.filter((m) => !m.id.includes('-sending') && !m.id.includes('-processing'));
       renderMessages();
@@ -950,6 +995,7 @@ export function setupTauriEventListeners() {
   });
 
   onAgentError((payload) => {
+    const targetSessionId = payload.agentId ? state.inflightSessionByAgent[payload.agentId] : undefined;
     if (payload.agentId) {
       delete state.inflightSessionByAgent[payload.agentId];
     }
@@ -957,6 +1003,8 @@ export function setupTauriEventListeners() {
       return;
     }
     clearMessageWatchdog(state);
+    clearMessageHardTimeout();
+    dismissMessageInactivityNotice(payload.agentId, targetSessionId);
     showError(`错误: ${payload.error || '未知错误'}`);
     refreshComposerState();
   });
@@ -1408,6 +1456,10 @@ export function setupEventListeners() {
   capabilityTabSkillBtnEl.addEventListener('click', () => {
     switchCapabilityCenterTab('skill');
   });
+  capabilitySearchInputEl.addEventListener('input', () => {
+    state.capabilitySearchQuery = capabilitySearchInputEl.value;
+    renderCapabilityCenter();
+  });
   capabilityMcpListEl.addEventListener('change', onCapabilityMcpToggleChange);
   capabilitySkillListEl.addEventListener('change', onCapabilitySkillToggleChange);
 
@@ -1814,15 +1866,63 @@ function addToInputHistory(content: string) {
 }
 
 // 发送消息
-const MESSAGE_TIMEOUT_MS = TIMEOUTS.messageSend;
+const MESSAGE_INACTIVITY_TIMEOUT_MS = TIMEOUTS.messageSend;
+const MESSAGE_HARD_TIMEOUT_MS = TIMEOUTS.messageHardSend;
 
-function scheduleMessageTimeoutWatchdog(requestAgentId: string, requestSessionId: string): void {
-  resetMessageWatchdog(state, requestAgentId, requestSessionId, MESSAGE_TIMEOUT_MS, () => {
+function clearMessageHardTimeout(): void {
+  if (messageHardTimeoutId === null) {
+    return;
+  }
+  window.clearTimeout(messageHardTimeoutId);
+  messageHardTimeoutId = null;
+}
+
+function dismissMessageInactivityNotice(agentId?: string, sessionId?: string): void {
+  if (!messageInactivityNotice) {
+    return;
+  }
+  if (agentId && messageInactivityNotice.agentId !== agentId) {
+    return;
+  }
+  if (sessionId && messageInactivityNotice.sessionId !== sessionId) {
+    return;
+  }
+
+  const noticeId = messageInactivityNotice.messageId;
+  const targetSessionId = messageInactivityNotice.sessionId;
+  messageInactivityNotice = null;
+
+  const existing = state.messagesBySession[targetSessionId] || [];
+  const filtered = existing.filter((item) => item.id !== noticeId);
+  if (filtered.length !== existing.length) {
+    state.messagesBySession[targetSessionId] = filtered;
+  }
+
+  if (state.currentSessionId === targetSessionId) {
+    const currentFiltered = state.messages.filter((item) => item.id !== noticeId);
+    if (currentFiltered.length !== state.messages.length) {
+      state.messages = currentFiltered;
+      renderMessages();
+    }
+  }
+}
+
+function scheduleMessageHardTimeout(requestAgentId: string, requestSessionId: string): void {
+  clearMessageHardTimeout();
+  messageHardTimeoutId = window.setTimeout(() => {
+    messageHardTimeoutId = null;
+    if (state.inflightSessionByAgent[requestAgentId] !== requestSessionId) {
+      return;
+    }
+
+    clearMessageWatchdog(state);
+    dismissMessageInactivityNotice(requestAgentId, requestSessionId);
+
     const timeoutMessage: Message = {
-      id: `msg-${Date.now()}-timeout`,
+      id: `msg-${Date.now()}-timeout-hard`,
       role: 'system',
       content:
-        '⏱️ 响应超时（60秒）。可能原因：\n1. iFlow 正在处理复杂任务\n2. 连接已断开\n3. iFlow 服务异常\n\n你可以：\n- 等待更长时间\n- 检查 iFlow 状态\n- 重新连接 Agent',
+        '⏱️ 长时间未完成（15分钟），已自动结束本次任务。\n\n你可以：\n- 再试一次\n- 把任务拆成更小步骤\n- 检查网络与工具状态',
       timestamp: new Date(),
     };
     state.messages.push(timeoutMessage);
@@ -1830,7 +1930,30 @@ function scheduleMessageTimeoutWatchdog(requestAgentId: string, requestSessionId
 
     delete state.inflightSessionByAgent[requestAgentId];
     refreshComposerState();
-    showError('响应超时，请检查连接状态');
+    showError('任务执行超过 15 分钟，已自动停止');
+  }, MESSAGE_HARD_TIMEOUT_MS);
+}
+
+function scheduleMessageTimeoutWatchdog(requestAgentId: string, requestSessionId: string): void {
+  resetMessageWatchdog(state, requestAgentId, requestSessionId, MESSAGE_INACTIVITY_TIMEOUT_MS, () => {
+    if (messageInactivityNotice) {
+      return;
+    }
+
+    const timeoutMessage: Message = {
+      id: `msg-${Date.now()}-timeout-soft`,
+      role: 'system',
+      content:
+        '⏳ 60秒暂无新输出，任务可能仍在运行（如下载/安装）。\n\n你可以：\n- 继续等待\n- 点击停止按钮中断',
+      timestamp: new Date(),
+    };
+    state.messages.push(timeoutMessage);
+    renderMessages();
+    messageInactivityNotice = {
+      agentId: requestAgentId,
+      sessionId: requestSessionId,
+      messageId: timeoutMessage.id,
+    };
   });
 }
 
@@ -1920,6 +2043,8 @@ export async function sendMessage() {
   renderMessages();
   scrollToBottom();
   state.inflightSessionByAgent[requestAgentId] = requestSessionId;
+  clearMessageHardTimeout();
+  dismissMessageInactivityNotice(requestAgentId, requestSessionId);
   refreshComposerState();
 
   try {
@@ -1945,6 +2070,7 @@ export async function sendMessage() {
     }
 
     scheduleMessageTimeoutWatchdog(requestAgentId, requestSessionId);
+    scheduleMessageHardTimeout(requestAgentId, requestSessionId);
   } catch (error) {
     state.messages = state.messages.filter((m) => m.id !== sendingMessage.id);
     renderMessages();
@@ -1954,6 +2080,9 @@ export async function sendMessage() {
     }
 
     showError(`发送失败: ${String(error)}`);
+    clearMessageWatchdog(state);
+    clearMessageHardTimeout();
+    dismissMessageInactivityNotice(requestAgentId, requestSessionId);
     delete state.inflightSessionByAgent[requestAgentId];
     refreshComposerState();
   }
@@ -1966,6 +2095,8 @@ export async function stopCurrentMessage() {
   }
 
   clearMessageWatchdog(state);
+  clearMessageHardTimeout();
+  dismissMessageInactivityNotice(requestAgentId, state.inflightSessionByAgent[requestAgentId]);
 
   delete state.inflightSessionByAgent[requestAgentId];
   state.messages = state.messages.filter((m) => !m.id.includes('-sending') && !m.id.includes('-processing'));
@@ -2005,14 +2136,20 @@ async function sendCompressToCurrentSession() {
   scrollToBottom();
 
   state.inflightSessionByAgent[agentId] = sessionId;
+  clearMessageHardTimeout();
+  dismissMessageInactivityNotice(agentId, sessionId);
   refreshComposerState();
 
   try {
     // 发送 null session ID，让 adapter 使用当前 session，避免 session switch
     await tauriSendMessage(agentId, '/compress', null);
     scheduleMessageTimeoutWatchdog(agentId, sessionId);
+    scheduleMessageHardTimeout(agentId, sessionId);
   } catch (error) {
     showError(`压缩失败: ${String(error)}`);
+    clearMessageWatchdog(state);
+    clearMessageHardTimeout();
+    dismissMessageInactivityNotice(agentId, sessionId);
     delete state.inflightSessionByAgent[agentId];
     refreshComposerState();
   }

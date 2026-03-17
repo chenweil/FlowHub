@@ -117,6 +117,7 @@ export const state = {
     localStorage.getItem(HISTORY_CONTINUATION_STORAGE_KEY)
   ),
   capabilityCenterTab: 'mcp' as 'mcp' | 'skill',
+  capabilitySearchQuery: '',
   capabilityLoading: false,
   capabilityErrors: {} as Record<string, string>,
 };

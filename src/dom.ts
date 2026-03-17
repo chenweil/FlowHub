@@ -80,6 +80,7 @@ export const closeCapabilityCenterFooterBtnEl = document.getElementById(
 ) as HTMLButtonElement;
 export const capabilityTabMcpBtnEl = document.getElementById('capability-tab-mcp') as HTMLButtonElement;
 export const capabilityTabSkillBtnEl = document.getElementById('capability-tab-skill') as HTMLButtonElement;
+export const capabilitySearchInputEl = document.getElementById('capability-search-input') as HTMLInputElement;
 export const capabilityPanelMcpEl = document.getElementById('capability-panel-mcp') as HTMLDivElement;
 export const capabilityPanelSkillEl = document.getElementById('capability-panel-skill') as HTMLDivElement;
 export const capabilityMcpAgentLabelEl = document.getElementById(
