@@ -154,12 +154,14 @@
 ### 3.1.1 Qwen JSONL 样例
 
 ```json
-{"sessionId":"464a05db-d441-44fb-a696-f920a0e49ae4","type":"user","message":{"role":"user","parts":[{"text":"@hello-world.html 这个文件内容是什么?"}]}}
-{"sessionId":"464a05db-d441-44fb-a696-f920a0e49ae4","type":"assistant","message":{"role":"model","parts":[{"text":"The user is asking about a file...","thought":true},{"text":"The `hello-world.html` file is a simple HTML page..."}]}}
+{"sessionId":"464a05db-d441-44fb-a696-f920a0e49ae4","timestamp":"2026-03-23T05:25:08.744Z","type":"user","cwd":"/Users/chenweilong/playground","message":{"role":"user","parts":[{"text":"@hello-world.html 这个文件内容是什么?"}]}}
+{"sessionId":"464a05db-d441-44fb-a696-f920a0e49ae4","timestamp":"2026-03-23T05:25:14.033Z","type":"assistant","cwd":"/Users/chenweilong/playground","message":{"role":"model","parts":[{"text":"The user is asking about a file...","thought":true},{"text":"The `hello-world.html` file is a simple HTML page..."}]}}
 ```
 
 | 解析规则 | 说明 |
 |---|---|
+| 排序时间 | 使用记录里的 `timestamp`，不需要退化到文件修改时间 |
+| workspace 关联 | Qwen 记录内实际存在 `cwd`，但首阶段仍以 project 目录名作为主匹配依据，`cwd` 作为校验与兜底信息 |
 | user 消息 | 拼接 `parts[].text` |
 | assistant 消息 | 默认只保留非 `thought` 文本；是否展示 thought 单独由 UI 决定 |
 | system 消息 | 如 `ui_telemetry`、`at_command`，首阶段不进入聊天历史 |
@@ -202,6 +204,14 @@
 | `deleteIflowHistorySession` | `deleteQwenHistorySession` |
 | `switchAgentModel` | `switchQwenModel` |
 
+### 5.2 前端类型字段重命名
+
+| 原名称 | 新名称 |
+|---|---|
+| `Agent.iflowPath` | `Agent.qwenPath` |
+| `Agent.port` | 删除 |
+| `Session.source: 'iflow-log'` | `Session.source: 'qwen-log'` |
+
 ## ACP 数据流
 
 | 阶段 | 设计 |
@@ -241,6 +251,17 @@
 | Qwen 不支持 `session/set_model` | 自动退化为重启 Agent 切模型 |
 | Qwen 不支持 `session/set_think` | 前端展示“不支持思考模式切换”，不伪造成功状态 |
 
+## 持久化兼容策略
+
+| 项目 | 策略 |
+|---|---|
+| Tauri 存储文件名 | 首阶段保持 `iflow-session-store-<env>.json` 不变，避免升级后本地会话快照丢失 |
+| localStorage key | 首阶段保持现有 `iflow-*` key 不变，不做重命名，避免主题、通知、快捷键、草稿、历史等用户设置丢失 |
+| 旧 Agent 数据 | 启动时读取已持久化 Agent，若 `type === "iflow"`，归一化为 `qwen`；若存在 `iflowPath` 且 `qwenPath` 为空，则迁移到 `qwenPath` |
+| 旧历史来源字面值 | 读取到 `source === "iflow-log"` 时，在内存中归一化为 `qwen-log`；写回时统一使用 `qwen-log` |
+| 旧会话快照 | 旧会话继续可读；与 Qwen 当前运行时无法恢复的历史会话仍按只读历史处理，不阻塞新会话流程 |
+| 兼容窗口 | 首阶段以“读旧写新、键名不变”为原则；后续若要重命名存储文件或 key，再单独做一次性迁移 |
+
 ## 命名策略
 
 | 原则 | 说明 |
@@ -257,6 +278,7 @@
 | 模型列表来源变化 | 无法再沿用 iFlow bundle 解析 | 以 `session/new` / `session/load` 响应和配置更新为主，连接前使用空态或手动输入降级 |
 | 部分 ACP 方法可能不同 | `set_model`、`set_think`、terminal 类能力不一定完全兼容 | 保留回退路径，不阻塞主聊天流程 |
 | 恢复路径差异 | Qwen CLI 还有 `--continue` / `--resume`，与 ACP `session/load` 语义可能重叠 | 首阶段先验证并固定 `session/load`；若不工作再切换后备方案 |
+| 旧持久化数据兼容 | 现有存储文件名、localStorage key、`type/source` 字面值都带有 `iflow` 痕迹 | 首阶段保持键名不变，并在加载时做归一化迁移，避免用户数据丢失 |
 
 ## 测试与验收
 
@@ -280,4 +302,3 @@
 | 7 | 前端 Tauri 调用、重连语义、默认值与文案切到 Qwen |
 | 8 | 补齐测试并验证 |
 | 9 | 启动新的开发服务供手工测试 |
-| 7 | 启动新的开发服务供手工测试 |
