@@ -72,11 +72,35 @@
 | 项目 | 设计 |
 |---|---|
 | 子进程启动 | 使用 `tokio::process::Command` 启动 `qwen --acp`，并显式获取 `stdin`、`stdout`、`stderr` |
-| 消息发送 | 通过子进程 `stdin` 写入 ACP JSON-RPC 消息，使用逐条写入并在每条消息后 flush |
-| 消息接收 | 通过 `tokio::io::BufReader` 包装 `stdout`，按行读取 ACP JSON 消息 |
-| stderr 处理 | `stderr` 不参与 ACP 协议，仅作为日志流异步消费，避免缓冲区阻塞导致子进程挂起 |
+| 帧格式 | Qwen ACP 基于 `@agentclientprotocol/sdk` 的 `ndJsonStream`，采用 `NDJSON`：每条消息为一行 `JSON + "\\n"`，不是 `Content-Length` 报文 |
+| 消息发送 | 通过子进程 `stdin` 写入 ACP JSON-RPC 消息，按 `JSON.stringify(message) + "\\n"` 逐条写入并 flush |
+| 消息接收 | 通过 `tokio::io::BufReader` 包装 `stdout`，按行读取并逐行 `serde_json` 解析 |
+| stderr 处理 | `stderr` 不参与 ACP 协议，仅作为日志流异步消费，避免缓冲区阻塞导致子进程挂起；日志输出不能混入 `stdout` 解析通道 |
 | 子进程退出 | 增加独立 wait 任务监听退出码；一旦退出，统一向前端发错误事件并清理 inflight 状态 |
 | 连接关闭 | 当 `stdout` EOF、`stdin` 写失败或 wait 任务先结束时，都视为 ACP 连接断开 |
+
+### 2.2 Qwen Agent 可能发起的 Client Request
+
+| 方法 | 用途 | 首阶段处理 |
+|---|---|---|
+| `session/request_permission` | 请求用户授权工具调用 | 继续沿用当前“allow_once”自动响应逻辑 |
+| `fs/read_text_file` | 读取客户端文件 | 继续支持 |
+| `fs/write_text_file` | 写入客户端文件 | 继续支持 |
+| `terminal/create` | 创建终端任务 | 首阶段若前端未接入终端能力，则返回 method not found 或显式错误 |
+| `terminal/output` | 终端输出流交互 | 同上，首阶段不实现 |
+| `terminal/kill` | 终止终端任务 | 同上，首阶段不实现 |
+| `terminal/release` | 释放终端句柄 | 同上，首阶段不实现 |
+| `terminal/wait_for_exit` | 等待终端退出 | 同上，首阶段不实现 |
+| `ext/*` | 扩展方法 | 未明确需要时默认不实现 |
+
+### 2.3 首阶段 Client Capability 边界
+
+| 能力 | 决策 |
+|---|---|
+| 文件读写 | 保留，确保 Qwen 的基本代码编辑链路可用 |
+| 权限请求 | 保留，兼容工具调用前授权 |
+| 终端类请求 | 首阶段不实现，除非验证发现 Qwen 主流程强依赖 |
+| 扩展方法 | 按需实现，不在首阶段承诺 |
 
 ### 3. 历史会话层
 
@@ -97,6 +121,19 @@
 | `parts[].text` | 作为主文本来源 |
 | `parts[].thought` | 若存在且为 `true`，表示思考内容；首阶段历史面板默认不单独展示 |
 | `parts[].functionCall` | 视为结构化工具信息，首阶段忽略，不写入普通聊天消息 |
+
+### 3.1.1 Qwen JSONL 样例
+
+```json
+{"sessionId":"464a05db-d441-44fb-a696-f920a0e49ae4","type":"user","message":{"role":"user","parts":[{"text":"@hello-world.html 这个文件内容是什么?"}]}}
+{"sessionId":"464a05db-d441-44fb-a696-f920a0e49ae4","type":"assistant","message":{"role":"model","parts":[{"text":"The user is asking about a file...","thought":true},{"text":"The `hello-world.html` file is a simple HTML page..."}]}}
+```
+
+| 解析规则 | 说明 |
+|---|---|
+| user 消息 | 拼接 `parts[].text` |
+| assistant 消息 | 默认只保留非 `thought` 文本；是否展示 thought 单独由 UI 决定 |
+| system 消息 | 如 `ui_telemetry`、`at_command`，首阶段不进入聊天历史 |
 
 ### 3.2 Project Key 规则
 
@@ -167,10 +204,10 @@
 
 | 风险 | 说明 | 对策 |
 |---|---|---|
-| 传输层改动较大 | 现有适配器深度依赖 WebSocket | 抽出“收发消息接口”，尽量复用 ACP 状态机 |
+| 传输层改动较大 | 现有适配器深度依赖 WebSocket | 已确认 Qwen 使用 NDJSON stdio；实现时抽出“收发消息接口”，尽量复用 ACP 状态机 |
 | Qwen 历史结构不同 | 不能直接复用 iFlow JSONL 解析 | 单独实现 Qwen 历史解析，只提取稳定文本字段 |
 | 模型列表来源变化 | 无法再沿用 iFlow bundle 解析 | 以 `session/new` / `session/load` 响应和配置更新为主，连接前使用空态或手动输入降级 |
-| 部分 ACP 方法可能不同 | `set_model`、`set_think` 等可选能力不一定完全兼容 | 保留回退路径，不阻塞主聊天流程 |
+| 部分 ACP 方法可能不同 | `set_model`、`set_think`、terminal 类能力不一定完全兼容 | 保留回退路径，不阻塞主聊天流程 |
 
 ## 测试与验收
 
