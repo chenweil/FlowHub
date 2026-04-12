@@ -43,10 +43,10 @@
 | 模块 | 当前行为 | 调整后行为 |
 |---|---|---|
 | 后端 Agent 启动 | 直接启动 iFlow，绑定端口，依赖 WebSocket ACP | 直接启动 `qwen --acp`，通过子进程 `stdin/stdout` 进行 ACP JSON-RPC 通信 |
-| ACP 传输层 | `src-tauri/src/agents/iflow_adapter.rs` 负责 WebSocket 连接与收发 | 替换为 Qwen `stdio ACP` 适配层，尽量复用现有 ACP 会话状态机 |
+| ACP 传输层 | `src-tauri/src/agents/iflow_adapter.rs` 负责 WebSocket 连接与收发 | 替换为 Qwen `stdio ACP` 适配层；移除 WebSocket 内部重试循环，失败后直接退出，由前端重新触发完整 spawn |
 | 历史读取 | 从 `~/.iflow/projects/.../session-*.jsonl` 读取 | 仅从 `~/.qwen/projects/.../chats/*.jsonl` 读取 |
 | 技能发现 | 扫描 `~/.iflow/skills` | 仅扫描 `~/.qwen/skills` |
-| 模型列表 | 通过解析 iFlow bundle 静态提取模型列表 | 以 `session/new` / `session/load` 返回的 `models` 字段和后续 ACP 配置更新为主要来源；连接前提供降级方案 |
+| 模型列表 | 通过解析 iFlow bundle 静态提取模型列表 | 以 `session/new` / `session/load` 返回的 `models` 字段和后续 ACP 配置更新为主要来源；删除静态 bundle 解析链路 |
 | 前端文案 | “添加 iFlow Agent”“iFlow CLI 路径”等 | 统一替换为 Qwen 对应文案 |
 
 ## 模块级设计
@@ -56,9 +56,11 @@
 | 文件 | 改动 |
 |---|---|
 | `src-tauri/src/commands.rs` | 将 `spawn_iflow_agent` 重命名为 `spawn_qwen_agent`，并改为基于 Qwen 的启动逻辑；不再申请端口 |
-| `src-tauri/src/commands.rs` | 将 `connect_iflow` 重命名为 `connect_qwen`，相关调用方全部同步更新 |
-| `src-tauri/src/state.rs` | `AgentInstance` 中的 `iflow_path` 重命名为 `qwen_path`；`port` 对 Qwen 不再作为必需字段 |
-| `src-tauri/src/models.rs` | `AgentInfo.agent_type` 固定为 `qwen`，相关类型名与字段命名同步去除 `iflow` |
+| `src-tauri/src/commands.rs` | 将 `connect_iflow` 重命名为 `connect_qwen`，`switch_agent_model` 重命名为 `switch_qwen_model`，相关调用方全部同步更新 |
+| `src-tauri/src/state.rs` | `AgentInstance` 中的 `iflow_path` 重命名为 `qwen_path`；删除 `port` 字段 |
+| `src-tauri/src/models.rs` | `AgentInfo.agent_type` 固定为 `qwen`，相关类型名与字段命名同步去除 `iflow`；`ConnectResponse` 删除 `port` 字段 |
+| `src-tauri/src/model_resolver.rs` | 删除整个文件；不再保留 iFlow 静态模型解析逻辑 |
+| `src-tauri/src/main.rs` | `generate_handler!` 中所有公开 Tauri 命令名同步改为 `qwen` 语义，不保留 `connect_iflow` 这类跨边界旧名称 |
 
 ### 2. ACP 适配层
 
@@ -68,6 +70,7 @@
 | `src-tauri/src/agents/session_params.rs` | 继续复用，前提是 Qwen ACP 的请求结构与当前使用方式兼容 |
 | `src-tauri/src/router.rs` | 尽量不改业务路由，只在必要时适配 Qwen 返回的 payload 差异 |
 | `src-tauri/src/agents/mod.rs` | 模块导出从 `iflow_adapter` 改为 `qwen_adapter` |
+| WebSocket 辅助函数 | 删除 `find_available_port()` 及所有端口相关调用 |
 
 ### 2.1 stdio 传输实现
 
@@ -78,8 +81,10 @@
 | 消息发送 | 通过子进程 `stdin` 写入 ACP JSON-RPC 消息，按 `JSON.stringify(message) + "\\n"` 逐条写入并 flush |
 | 消息接收 | 通过 `tokio::io::BufReader` 包装 `stdout`，按行读取并逐行 `serde_json` 解析 |
 | stderr 处理 | `stderr` 不参与 ACP 协议，仅作为日志流异步消费，避免缓冲区阻塞导致子进程挂起；日志输出不能混入 `stdout` 解析通道 |
-| 子进程退出 | 增加独立 wait 任务监听退出码；一旦退出，统一向前端发错误事件并清理 inflight 状态 |
+| 子进程退出 | 使用 `tokio::spawn` 启独立任务执行 `child.wait()`；一旦退出，统一向前端发错误事件并清理 inflight 状态 |
 | 连接关闭 | 当 `stdout` EOF、`stdin` 写失败或 wait 任务先结束时，都视为 ACP 连接断开 |
+| 失败语义 | `message_listener_task` 在 stdio 模式下不做内部重试，发生错误后直接退出 |
+| 重连职责 | 重连仅由前端显式调用 `connect_qwen` 重新触发完整 spawn 流程；自动重连逻辑继续放在 `features/agents/reconnect.ts` |
 
 ### 2.2 Qwen Agent 可能发起的 Client Request
 
@@ -94,6 +99,8 @@
 | `terminal/release` | 释放终端句柄 | 同上，首阶段不实现 |
 | `terminal/wait_for_exit` | 等待终端退出 | 同上，首阶段不实现 |
 | `ext/*` | 扩展方法 | 未明确需要时默认不实现 |
+| `_iflow/user/questions` | iFlow 私有方法 | 迁移时删除对应 handler |
+| `_iflow/plan/exit` | iFlow 私有方法 | 迁移时删除对应 handler |
 
 ### 2.3 首阶段 Client Capability 边界
 
@@ -104,13 +111,21 @@
 | 终端类请求 | 首阶段不实现，除非验证发现 Qwen 主流程强依赖 |
 | 扩展方法 | 按需实现，不在首阶段承诺 |
 
+### 2.4 initialize capabilities
+
+| 项目 | 设计 |
+|---|---|
+| `clientCapabilities.fs` | 保留 `readTextFile` / `writeTextFile` |
+| `clientCapabilities.terminal` | 首阶段不声明，省略即表示不支持 |
+| 兜底行为 | 若 Qwen 仍发送 `terminal/*` 请求，客户端返回 method not found 或显式 unsupported 错误 |
+
 ### 3. 历史会话层
 
 | 文件 | 改动 |
 |---|---|
 | `src-tauri/src/history.rs` | 保留文件位置，但内部所有 `iflow` 历史函数与辅助函数统一重命名为 `qwen` 语义，并改为基于 `~/.qwen/projects/<workspace-key>/chats/*.jsonl` 的解析 |
 | 历史内容提取 | 按 Qwen `message.parts` 数组解析，仅提取有 `text` 的条目；忽略 `functionCall` 等无法稳定映射的结构化条目 |
-| 历史会话名 | 优先使用首条用户消息压缩为标题，不追求还原所有系统事件 |
+| 历史会话名 | 优先使用首条用户消息压缩为标题，不追求还原所有系统事件；空标题 fallback 改为 `Qwen 会话` |
 | Session ID 归一化 | 直接使用文件名去掉 `.jsonl` 后的 UUID，不再校验 `session-` 前缀 |
 
 ### 3.0 历史命令与函数重命名
@@ -156,6 +171,7 @@
 | 基本规则 | 将 workspace 绝对路径中的 `/`、`:` 替换为 `-` |
 | 前缀规则 | 若转换后不以 `-` 开头，再补一个前导 `-` |
 | 当前工作区示例 | `/Users/chenweilong/www/FlowHub` -> `-Users-chenweilong-www-FlowHub` |
+| 复用策略 | 复用现有 `workspace_to_iflow_project_key` 逻辑并重命名为 `workspace_to_qwen_project_key` |
 
 ### 4. 技能发现层
 
@@ -170,8 +186,9 @@
 |---|---|
 | `index.html` | 弹窗标题、占位符、默认 Agent 名称、CLI 路径说明统一改为 Qwen |
 | `src/features/agents/actions.ts` | 新增 Agent 时默认 `agent.type = "qwen"`，ID 前缀、成功提示、加载提示同步切换 |
+| `src/features/agents/reconnect.ts` | 自动重连入口改为调用 `connectQwen`；重连语义明确为“重新 spawn Qwen 进程”，而不是重连底层传输 |
 | `src/services/tauri.ts` | 所有 Tauri 调用名同步重命名为 `qwen` 语义，不保留 `iflow` 包装层 |
-| `src/types.ts` | `source`、类型注释和字面值统一从 `iflow` 改为 `qwen` |
+| `src/types.ts` | `source`、类型注释和字面值统一从 `iflow` 改为 `qwen`；删除 `iflowPath` / `port` 语义 |
 | 默认 CLI 路径 | 添加 Agent 弹窗中的默认占位提示从 `iflow` 改为 `qwen` |
 
 ### 5.1 前端 Tauri 调用重命名
@@ -183,7 +200,7 @@
 | `listIflowHistorySessions` | `listQwenHistorySessions` |
 | `loadIflowHistoryMessages` | `loadQwenHistoryMessages` |
 | `deleteIflowHistorySession` | `deleteQwenHistorySession` |
-| `listAvailableModels` | `listQwenAvailableModels` |
+| `switchAgentModel` | `switchQwenModel` |
 
 ## ACP 数据流
 
@@ -204,6 +221,13 @@
 | 连接前 | 不再依赖静态解析 Qwen 安装包来展示模型列表；允许前端先为空，或提供一组可配置的常用模型候选 |
 | 连接后 | 以 `session/new` / `session/load` 返回的 `models` 和后续配置更新为准 |
 | 无模型元数据 | 允许用户手动输入模型名，连接和切换逻辑不依赖前端先拿到完整列表 |
+
+### 会话恢复策略
+
+| 方案 | 结论 |
+|---|---|
+| ACP `session/load` | 首选方案，作为主恢复链路 |
+| CLI `--continue` / `--resume` | 不作为首阶段主方案；仅在验证发现 Qwen ACP `session/load` 不可用时，作为后备恢复方案重新评估 |
 
 ## 错误处理
 
@@ -232,6 +256,7 @@
 | Qwen 历史结构不同 | 不能直接复用 iFlow JSONL 解析 | 单独实现 Qwen 历史解析，只提取稳定文本字段 |
 | 模型列表来源变化 | 无法再沿用 iFlow bundle 解析 | 以 `session/new` / `session/load` 响应和配置更新为主，连接前使用空态或手动输入降级 |
 | 部分 ACP 方法可能不同 | `set_model`、`set_think`、terminal 类能力不一定完全兼容 | 保留回退路径，不阻塞主聊天流程 |
+| 恢复路径差异 | Qwen CLI 还有 `--continue` / `--resume`，与 ACP `session/load` 语义可能重叠 | 首阶段先验证并固定 `session/load`；若不工作再切换后备方案 |
 
 ## 测试与验收
 
@@ -247,9 +272,12 @@
 | 顺序 | 任务 |
 |---|---|
 | 1 | 文件与命令重命名：`iflow_adapter.rs -> qwen_adapter.rs`，以及所有 `iflow` 函数名、类型名、Tauri 命令名统一改为 `qwen` |
-| 2 | 后端 ACP 传输层从 WebSocket 改为 stdio |
-| 3 | 历史读取切到 `~/.qwen/projects/.../chats/*.jsonl` |
-| 4 | 技能目录切到 `~/.qwen/skills` |
-| 5 | 前端 Tauri 调用、默认值与文案切到 Qwen |
-| 6 | 补齐测试并验证 |
+| 2 | 删除 WebSocket/端口依赖：`find_available_port()`、`tokio-tungstenite`、`url`、`ConnectResponse.port`、相关前端 `port` 存储 |
+| 3 | 后端 ACP 传输层从 WebSocket 改为 stdio，并移除内部重试循环 |
+| 4 | 历史读取切到 `~/.qwen/projects/.../chats/*.jsonl`，同步修正文案 fallback 为 `Qwen 会话` |
+| 5 | 技能目录切到 `~/.qwen/skills`，删除 `_iflow/*` 私有 request handler |
+| 6 | 删除 `model_resolver.rs` 与静态模型列表命令，前端改为动态/手动输入模型策略 |
+| 7 | 前端 Tauri 调用、重连语义、默认值与文案切到 Qwen |
+| 8 | 补齐测试并验证 |
+| 9 | 启动新的开发服务供手工测试 |
 | 7 | 启动新的开发服务供手工测试 |
