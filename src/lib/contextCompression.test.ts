@@ -113,7 +113,7 @@ describe('contextCompression', () => {
         hasSession: true,
         isBusy: false,
         messages: [userMessage, assistantMessage],
-        sessionSource: 'iflow-log',
+        sessionSource: 'qwen-log',
       })
     ).toBe('历史会话不可压缩');
 

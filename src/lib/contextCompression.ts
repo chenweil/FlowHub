@@ -36,7 +36,7 @@ export function getCompressionDisabledReason(input: CompressionEligibilityInput)
   if (!input.agent || input.agent.status !== 'connected') {
     return 'Agent 离线';
   }
-  if (input.sessionSource === 'iflow-log') {
+  if (input.sessionSource === 'qwen-log') {
     return '历史会话不可压缩';
   }
   if (input.isBusy) {

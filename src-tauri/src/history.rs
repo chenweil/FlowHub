@@ -1,4 +1,4 @@
-//! iFlow 历史会话文件读取与解析
+//! Qwen 历史会话文件读取与解析
 
 use std::collections::HashSet;
 use std::env;
@@ -11,7 +11,7 @@ use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct IflowHistorySession {
+pub struct QwenHistorySession {
     pub session_id: String,
     pub title: String,
     pub created_at: String,
@@ -21,7 +21,7 @@ pub struct IflowHistorySession {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct IflowHistoryMessage {
+pub struct QwenHistoryMessage {
     pub id: String,
     pub role: String,
     pub content: String,
@@ -53,7 +53,7 @@ fn workspace_path_matches(expected_workspace_path: &str, record_cwd: &str) -> bo
     is_same_or_ancestor(&expected, &actual) || is_same_or_ancestor(&actual, &expected)
 }
 
-fn workspace_to_iflow_project_key(workspace_path: &str) -> String {
+fn workspace_to_qwen_project_key(workspace_path: &str) -> String {
     let normalized = normalize_workspace_path(workspace_path);
     let mut key = normalized.replace('/', "-").replace(':', "-");
     if !key.starts_with('-') {
@@ -62,54 +62,57 @@ fn workspace_to_iflow_project_key(workspace_path: &str) -> String {
     key
 }
 
-fn iflow_projects_root() -> Result<PathBuf, String> {
+fn qwen_projects_root() -> Result<PathBuf, String> {
     let home_dir = env::var("HOME")
         .or_else(|_| env::var("USERPROFILE"))
         .map_err(|e| format!("HOME/USERPROFILE is not set: {}", e))?;
-    Ok(PathBuf::from(home_dir).join(".iflow").join("projects"))
+    Ok(PathBuf::from(home_dir).join(".qwen").join("projects"))
 }
 
-fn iflow_project_dirs_for_workspace(
+fn qwen_chat_dirs_for_workspace(
     workspace_path: &str,
     normalized_workspace_path: &str,
 ) -> Result<Vec<PathBuf>, String> {
+    let root = qwen_projects_root()?;
     let mut candidates = Vec::new();
     let mut seen = HashSet::new();
 
     for path in [workspace_path, normalized_workspace_path] {
-        let key = workspace_to_iflow_project_key(path);
+        let key = workspace_to_qwen_project_key(path);
         if seen.insert(key.clone()) {
-            candidates.push(iflow_projects_root()?.join(key));
+            candidates.push(root.join(key).join("chats"));
         }
     }
 
     Ok(candidates)
 }
 
-async fn list_all_iflow_project_dirs() -> Result<Vec<PathBuf>, String> {
-    let root = iflow_projects_root()?;
+async fn list_all_qwen_chat_dirs() -> Result<Vec<PathBuf>, String> {
+    let root = qwen_projects_root()?;
     let mut dirs = Vec::new();
     let mut reader = match tokio::fs::read_dir(&root).await {
         Ok(reader) => reader,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(dirs),
         Err(error) => {
             return Err(format!(
-                "Failed to open iFlow projects root {}: {}",
+                "Failed to open Qwen projects root {}: {}",
                 root.display(),
                 error
-            ))
+            ));
         }
     };
 
     while let Some(entry) = reader
         .next_entry()
         .await
-        .map_err(|e| format!("Failed to read iFlow projects root entry: {}", e))?
+        .map_err(|e| format!("Failed to read Qwen projects root entry: {}", e))?
     {
-        let path = entry.path();
-        match entry.file_type().await {
-            Ok(file_type) if file_type.is_dir() => dirs.push(path),
+        let project_dir = entry.path();
+        let chat_dir = project_dir.join("chats");
+        match tokio::fs::metadata(&chat_dir).await {
+            Ok(metadata) if metadata.is_dir() => dirs.push(chat_dir),
             Ok(_) => continue,
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
             Err(_) => continue,
         }
     }
@@ -127,127 +130,13 @@ fn to_rfc3339_or_now(system_time: Option<std::time::SystemTime>) -> String {
 fn compact_title(raw: &str) -> String {
     let normalized = raw.replace('\n', " ").replace('\r', " ").trim().to_string();
     if normalized.is_empty() {
-        return "iFlow 会话".to_string();
+        return "Qwen 会话".to_string();
     }
     let max_len = 28;
     if normalized.chars().count() <= max_len {
         return normalized;
     }
     format!("{}...", normalized.chars().take(max_len).collect::<String>())
-}
-
-fn extract_text_value(value: &Value) -> Option<String> {
-    match value {
-        Value::String(text) => {
-            let normalized = text.trim();
-            if normalized.is_empty() {
-                None
-            } else {
-                Some(normalized.to_string())
-            }
-        }
-        Value::Array(items) => {
-            let parts: Vec<String> = items.iter().filter_map(extract_text_value).collect();
-            if parts.is_empty() {
-                None
-            } else {
-                Some(parts.join("\n"))
-            }
-        }
-        Value::Object(map) => {
-            if let Some(text) = map.get("text").and_then(extract_text_value) {
-                return Some(text);
-            }
-            map.get("content").and_then(extract_text_value)
-        }
-        _ => None,
-    }
-}
-
-fn extract_text_entries_only(value: &Value) -> Option<String> {
-    match value {
-        Value::String(text) => {
-            let normalized = text.trim();
-            if normalized.is_empty() {
-                None
-            } else {
-                Some(normalized.to_string())
-            }
-        }
-        Value::Array(items) => {
-            let mut parts = Vec::new();
-            for item in items {
-                let Some(item_map) = item.as_object() else {
-                    continue;
-                };
-                let Some(item_type) = item_map.get("type").and_then(Value::as_str) else {
-                    continue;
-                };
-                if item_type != "text" {
-                    continue;
-                }
-                if let Some(text) = item_map.get("text").and_then(extract_text_value) {
-                    parts.push(text);
-                }
-            }
-            if parts.is_empty() {
-                None
-            } else {
-                Some(parts.join("\n"))
-            }
-        }
-        Value::Object(map) => {
-            if let Some(item_type) = map.get("type").and_then(Value::as_str) {
-                if item_type != "text" {
-                    return None;
-                }
-                return map.get("text").and_then(extract_text_value);
-            }
-
-            if let Some(text) = map.get("text").and_then(extract_text_value) {
-                return Some(text);
-            }
-
-            map.get("content").and_then(extract_text_entries_only)
-        }
-        _ => None,
-    }
-}
-
-fn has_structured_tool_entries(value: &Value) -> bool {
-    let Value::Array(items) = value else {
-        return false;
-    };
-
-    items.iter().any(|item| {
-        item.as_object()
-            .and_then(|map| map.get("type"))
-            .and_then(Value::as_str)
-            .map(|kind| kind == "tool_use" || kind == "tool_result")
-            .unwrap_or(false)
-    })
-}
-
-fn extract_history_message_content(record: &Value, record_type: &str) -> Option<String> {
-    let content = record.get("message").and_then(|message| message.get("content"))?;
-
-    if has_structured_tool_entries(content) {
-        // 过滤工具编排中间日志，避免污染历史回复与 Markdown 渲染。
-        return None;
-    }
-
-    // 仅提取文本片段，忽略 tool_use/tool_result 等结构化条目。
-    let text_only = extract_text_entries_only(content)?;
-    if text_only.trim().is_empty() {
-        return None;
-    }
-
-    // 对 user/assistant 之外的类型不展示（理论上外层已过滤，这里兜底）。
-    if record_type != "user" && record_type != "assistant" {
-        return None;
-    }
-
-    Some(text_only)
 }
 
 fn extract_history_timestamp(record: &Value) -> Option<String> {
@@ -265,11 +154,32 @@ fn extract_history_record_cwd(record: &Value) -> Option<String> {
         .map(normalize_workspace_path)
 }
 
-async fn parse_iflow_history_summary(
+fn extract_history_message_content(record: &Value, record_type: &str) -> Option<String> {
+    if record_type != "user" && record_type != "assistant" {
+        return None;
+    }
+
+    let parts = record.get("message")?.get("parts")?.as_array()?;
+    let text_items = parts
+        .iter()
+        .filter(|item| !item.get("thought").and_then(Value::as_bool).unwrap_or(false))
+        .filter_map(|item| item.get("text").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>();
+
+    if text_items.is_empty() {
+        None
+    } else {
+        Some(text_items.join("\n"))
+    }
+}
+
+async fn parse_qwen_history_summary(
     file_path: &Path,
     session_id: &str,
     expected_workspace_path: &str,
-) -> Result<Option<IflowHistorySession>, String> {
+) -> Result<Option<QwenHistorySession>, String> {
     let raw = tokio::fs::read_to_string(file_path)
         .await
         .map_err(|e| format!("Failed to read {}: {}", file_path.display(), e))?;
@@ -331,7 +241,7 @@ async fn parse_iflow_history_summary(
         return Ok(None);
     }
 
-    Ok(Some(IflowHistorySession {
+    Ok(Some(QwenHistorySession {
         session_id: session_id.to_string(),
         title: compact_title(title.as_deref().unwrap_or(session_id)),
         created_at: created_at.unwrap_or_else(|| fallback_ts.clone()),
@@ -340,18 +250,21 @@ async fn parse_iflow_history_summary(
     }))
 }
 
-async fn parse_iflow_history_messages(
+async fn parse_qwen_history_messages(
     file_path: &Path,
     session_id: &str,
     expected_workspace_path: &str,
-) -> Result<Vec<IflowHistoryMessage>, String> {
+) -> Result<Vec<QwenHistoryMessage>, String> {
     let raw = tokio::fs::read_to_string(file_path)
         .await
         .map_err(|e| format!("Failed to read {}: {}", file_path.display(), e))?;
+    let metadata = tokio::fs::metadata(file_path).await.ok();
+    let fallback_ts = to_rfc3339_or_now(metadata.and_then(|item| item.modified().ok()));
 
     let mut messages = Vec::new();
     let mut has_cwd = false;
     let mut workspace_matches = false;
+
     for (index, line) in raw.lines().enumerate() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -386,15 +299,14 @@ async fn parse_iflow_history_messages(
             continue;
         };
 
-        let timestamp = extract_history_timestamp(&record).unwrap_or_else(|| Utc::now().to_rfc3339());
-
+        let timestamp = extract_history_timestamp(&record).unwrap_or_else(|| fallback_ts.clone());
         let id = record
             .get("uuid")
             .and_then(Value::as_str)
             .map(|item| item.to_string())
             .unwrap_or_else(|| format!("{}-{}", session_id, index));
 
-        messages.push(IflowHistoryMessage {
+        messages.push(QwenHistoryMessage {
             id,
             role: role.to_string(),
             content,
@@ -412,51 +324,49 @@ async fn parse_iflow_history_messages(
     Ok(messages)
 }
 
-fn normalize_iflow_session_id(session_id: &str) -> Result<String, String> {
-    let normalized_session_id = session_id.trim().trim_end_matches(".jsonl").to_string();
-    if normalized_session_id.is_empty() {
+fn normalize_qwen_session_id(session_id: &str) -> Result<String, String> {
+    let normalized = session_id.trim().trim_end_matches(".jsonl").to_string();
+    if normalized.is_empty() {
         return Err("session_id cannot be empty".to_string());
     }
-    if !normalized_session_id.starts_with("session-") {
-        return Err("Invalid session_id format".to_string());
-    }
-    Ok(normalized_session_id)
+    Ok(normalized)
 }
 
 #[tauri::command]
-pub async fn list_iflow_history_sessions(
+pub async fn list_qwen_history_sessions(
     workspace_path: String,
-) -> Result<Vec<IflowHistorySession>, String> {
+) -> Result<Vec<QwenHistorySession>, String> {
     let normalized_workspace = match tokio::fs::canonicalize(&workspace_path).await {
         Ok(path) => normalize_workspace_path(&path.to_string_lossy()),
         Err(_) => normalize_workspace_path(&workspace_path),
     };
-    let candidate_dirs = iflow_project_dirs_for_workspace(&workspace_path, &normalized_workspace)?;
+    let candidate_dirs = qwen_chat_dirs_for_workspace(&workspace_path, &normalized_workspace)?;
 
     let mut seen_sessions = HashSet::new();
     let mut sessions = Vec::new();
-    for project_dir in candidate_dirs {
-        let mut reader = match tokio::fs::read_dir(&project_dir).await {
+
+    for chat_dir in candidate_dirs {
+        let mut reader = match tokio::fs::read_dir(&chat_dir).await {
             Ok(reader) => reader,
             Err(error) if error.kind() == ErrorKind::NotFound => continue,
             Err(error) => {
                 return Err(format!(
-                    "Failed to open iFlow project dir {}: {}",
-                    project_dir.display(),
+                    "Failed to open Qwen chat dir {}: {}",
+                    chat_dir.display(),
                     error
-                ))
+                ));
             }
         };
 
         while let Some(entry) = reader
             .next_entry()
             .await
-            .map_err(|e| format!("Failed to read iFlow project entry: {}", e))?
+            .map_err(|e| format!("Failed to read Qwen chat entry: {}", e))?
         {
             let path = entry.path();
             let file_name = entry.file_name();
             let file_name = file_name.to_string_lossy();
-            if !file_name.starts_with("session-") || !file_name.ends_with(".jsonl") {
+            if !file_name.ends_with(".jsonl") {
                 continue;
             }
 
@@ -465,7 +375,7 @@ pub async fn list_iflow_history_sessions(
                 continue;
             }
             if let Ok(Some(summary)) =
-                parse_iflow_history_summary(&path, &session_id, &normalized_workspace).await
+                parse_qwen_history_summary(&path, &session_id, &normalized_workspace).await
             {
                 sessions.push(summary);
             }
@@ -473,29 +383,29 @@ pub async fn list_iflow_history_sessions(
     }
 
     if sessions.is_empty() {
-        let fallback_dirs = list_all_iflow_project_dirs().await?;
-        for project_dir in fallback_dirs {
-            let mut reader = match tokio::fs::read_dir(&project_dir).await {
+        let fallback_dirs = list_all_qwen_chat_dirs().await?;
+        for chat_dir in fallback_dirs {
+            let mut reader = match tokio::fs::read_dir(&chat_dir).await {
                 Ok(reader) => reader,
                 Err(error) if error.kind() == ErrorKind::NotFound => continue,
                 Err(error) => {
                     return Err(format!(
-                        "Failed to open iFlow project dir {}: {}",
-                        project_dir.display(),
+                        "Failed to open Qwen chat dir {}: {}",
+                        chat_dir.display(),
                         error
-                    ))
+                    ));
                 }
             };
 
             while let Some(entry) = reader
                 .next_entry()
                 .await
-                .map_err(|e| format!("Failed to read iFlow project entry: {}", e))?
+                .map_err(|e| format!("Failed to read Qwen chat entry: {}", e))?
             {
                 let path = entry.path();
                 let file_name = entry.file_name();
                 let file_name = file_name.to_string_lossy();
-                if !file_name.starts_with("session-") || !file_name.ends_with(".jsonl") {
+                if !file_name.ends_with(".jsonl") {
                     continue;
                 }
 
@@ -504,7 +414,7 @@ pub async fn list_iflow_history_sessions(
                     continue;
                 }
                 if let Ok(Some(summary)) =
-                    parse_iflow_history_summary(&path, &session_id, &normalized_workspace).await
+                    parse_qwen_history_summary(&path, &session_id, &normalized_workspace).await
                 {
                     sessions.push(summary);
                 }
@@ -517,23 +427,22 @@ pub async fn list_iflow_history_sessions(
 }
 
 #[tauri::command]
-pub async fn load_iflow_history_messages(
+pub async fn load_qwen_history_messages(
     workspace_path: String,
     session_id: String,
-) -> Result<Vec<IflowHistoryMessage>, String> {
-    let normalized_session_id = normalize_iflow_session_id(&session_id)?;
-
+) -> Result<Vec<QwenHistoryMessage>, String> {
+    let normalized_session_id = normalize_qwen_session_id(&session_id)?;
     let normalized_workspace = match tokio::fs::canonicalize(&workspace_path).await {
         Ok(path) => normalize_workspace_path(&path.to_string_lossy()),
         Err(_) => normalize_workspace_path(&workspace_path),
     };
-    let candidate_dirs = iflow_project_dirs_for_workspace(&workspace_path, &normalized_workspace)?;
+    let candidate_dirs = qwen_chat_dirs_for_workspace(&workspace_path, &normalized_workspace)?;
 
-    for project_dir in candidate_dirs {
-        let file_path = project_dir.join(format!("{}.jsonl", normalized_session_id));
+    for chat_dir in candidate_dirs {
+        let file_path = chat_dir.join(format!("{}.jsonl", normalized_session_id));
         match tokio::fs::metadata(&file_path).await {
             Ok(metadata) if metadata.is_file() => {
-                return parse_iflow_history_messages(
+                return parse_qwen_history_messages(
                     &file_path,
                     &normalized_session_id,
                     &normalized_workspace,
@@ -548,12 +457,12 @@ pub async fn load_iflow_history_messages(
         }
     }
 
-    let fallback_dirs = list_all_iflow_project_dirs().await?;
-    for project_dir in fallback_dirs {
-        let file_path = project_dir.join(format!("{}.jsonl", normalized_session_id));
+    let fallback_dirs = list_all_qwen_chat_dirs().await?;
+    for chat_dir in fallback_dirs {
+        let file_path = chat_dir.join(format!("{}.jsonl", normalized_session_id));
         match tokio::fs::metadata(&file_path).await {
             Ok(metadata) if metadata.is_file() => {
-                return parse_iflow_history_messages(
+                return parse_qwen_history_messages(
                     &file_path,
                     &normalized_session_id,
                     &normalized_workspace,
@@ -575,19 +484,19 @@ pub async fn load_iflow_history_messages(
 }
 
 #[tauri::command]
-pub async fn delete_iflow_history_session(
+pub async fn delete_qwen_history_session(
     workspace_path: String,
     session_id: String,
 ) -> Result<bool, String> {
-    let normalized_session_id = normalize_iflow_session_id(&session_id)?;
+    let normalized_session_id = normalize_qwen_session_id(&session_id)?;
     let normalized_workspace = match tokio::fs::canonicalize(&workspace_path).await {
         Ok(path) => normalize_workspace_path(&path.to_string_lossy()),
         Err(_) => normalize_workspace_path(&workspace_path),
     };
-    let candidate_dirs = iflow_project_dirs_for_workspace(&workspace_path, &normalized_workspace)?;
+    let candidate_dirs = qwen_chat_dirs_for_workspace(&workspace_path, &normalized_workspace)?;
 
-    for project_dir in candidate_dirs {
-        let file_path = project_dir.join(format!("{}.jsonl", normalized_session_id));
+    for chat_dir in candidate_dirs {
+        let file_path = chat_dir.join(format!("{}.jsonl", normalized_session_id));
         match tokio::fs::remove_file(&file_path).await {
             Ok(_) => return Ok(true),
             Err(error) if error.kind() == ErrorKind::NotFound => continue,
@@ -597,9 +506,9 @@ pub async fn delete_iflow_history_session(
         }
     }
 
-    let fallback_dirs = list_all_iflow_project_dirs().await?;
-    for project_dir in fallback_dirs {
-        let file_path = project_dir.join(format!("{}.jsonl", normalized_session_id));
+    let fallback_dirs = list_all_qwen_chat_dirs().await?;
+    for chat_dir in fallback_dirs {
+        let file_path = chat_dir.join(format!("{}.jsonl", normalized_session_id));
         match tokio::fs::remove_file(&file_path).await {
             Ok(_) => return Ok(true),
             Err(error) if error.kind() == ErrorKind::NotFound => continue,
@@ -612,9 +521,66 @@ pub async fn delete_iflow_history_session(
     Ok(false)
 }
 
+#[tauri::command]
+pub async fn clear_qwen_history_sessions(workspace_path: String) -> Result<usize, String> {
+    let normalized_workspace = match tokio::fs::canonicalize(&workspace_path).await {
+        Ok(path) => normalize_workspace_path(&path.to_string_lossy()),
+        Err(_) => normalize_workspace_path(&workspace_path),
+    };
+    let candidate_dirs = qwen_chat_dirs_for_workspace(&workspace_path, &normalized_workspace)?;
+    let mut deleted_files = 0_usize;
+
+    for chat_dir in candidate_dirs {
+        let mut reader = match tokio::fs::read_dir(&chat_dir).await {
+            Ok(reader) => reader,
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(format!(
+                    "Failed to open Qwen chat dir {}: {}",
+                    chat_dir.display(),
+                    error
+                ));
+            }
+        };
+
+        while let Some(entry) = reader
+            .next_entry()
+            .await
+            .map_err(|e| format!("Failed to read Qwen chat entry: {}", e))?
+        {
+            let file_name = entry.file_name();
+            let file_name = file_name.to_string_lossy();
+            if !file_name.ends_with(".jsonl") {
+                continue;
+            }
+
+            let path = entry.path();
+            tokio::fs::remove_file(&path)
+                .await
+                .map_err(|e| format!("Failed to delete {}: {}", path.display(), e))?;
+            deleted_files += 1;
+        }
+    }
+
+    Ok(deleted_files)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::workspace_path_matches;
+    use super::{compact_title, normalize_qwen_session_id, workspace_path_matches};
+
+    #[test]
+    fn normalize_qwen_session_id_accepts_uuid_jsonl() {
+        assert_eq!(
+            normalize_qwen_session_id("464a05db-d441-44fb-a696-f920a0e49ae4.jsonl").unwrap(),
+            "464a05db-d441-44fb-a696-f920a0e49ae4"
+        );
+    }
+
+    #[test]
+    fn compact_title_falls_back_to_qwen_session() {
+        assert_eq!(compact_title("   "), "Qwen 会话");
+    }
 
     #[test]
     fn workspace_match_supports_exact_and_parent_child() {
@@ -635,49 +601,4 @@ mod tests {
             "/Users/chenweilong/Downloads"
         ));
     }
-}
-
-#[tauri::command]
-pub async fn clear_iflow_history_sessions(workspace_path: String) -> Result<usize, String> {
-    let normalized_workspace = match tokio::fs::canonicalize(&workspace_path).await {
-        Ok(path) => normalize_workspace_path(&path.to_string_lossy()),
-        Err(_) => normalize_workspace_path(&workspace_path),
-    };
-    let candidate_dirs = iflow_project_dirs_for_workspace(&workspace_path, &normalized_workspace)?;
-
-    let mut deleted_files = 0_usize;
-
-    for project_dir in candidate_dirs {
-        let mut reader = match tokio::fs::read_dir(&project_dir).await {
-            Ok(reader) => reader,
-            Err(error) if error.kind() == ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(format!(
-                    "Failed to open iFlow project dir {}: {}",
-                    project_dir.display(),
-                    error
-                ))
-            }
-        };
-
-        while let Some(entry) = reader
-            .next_entry()
-            .await
-            .map_err(|e| format!("Failed to read iFlow project entry: {}", e))?
-        {
-            let file_name = entry.file_name();
-            let file_name = file_name.to_string_lossy();
-            if !file_name.starts_with("session-") || !file_name.ends_with(".jsonl") {
-                continue;
-            }
-
-            let path = entry.path();
-            tokio::fs::remove_file(&path)
-                .await
-                .map_err(|e| format!("Failed to delete {}: {}", path.display(), e))?;
-            deleted_files += 1;
-        }
-    }
-
-    Ok(deleted_files)
 }

@@ -50,11 +50,6 @@ impl AgentManager {
         agents.drain().map(|(_, instance)| instance).collect()
     }
 
-    pub async fn port_of(&self, agent_id: &str) -> Option<u16> {
-        let agents = self.agents.read().await;
-        agents.get(agent_id).map(|instance| instance.port)
-    }
-
     pub async fn workspace_path_of(&self, agent_id: &str) -> Option<String> {
         let agents = self.agents.read().await;
         agents

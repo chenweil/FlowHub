@@ -2,19 +2,18 @@
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
 import type {
-  IflowHistorySessionRecord,
-  IflowHistoryMessageRecord,
-  ModelOption,
+  QwenHistorySessionRecord,
+  QwenHistoryMessageRecord,
   SkillRuntimeItem,
   StorageSnapshot,
   GitFileChange,
+  FileItem,
 } from '../types';
 
 export { convertFileSrc, getVersion };
 
-export interface ConnectIflowResult {
+export interface ConnectQwenResult {
   success: boolean;
-  port: number;
   error?: string;
 }
 
@@ -26,28 +25,28 @@ export function resolveHtmlArtifactPath(agentId: string, filePath: string): Prom
   return invoke<string>('resolve_html_artifact_path', { agentId, filePath });
 }
 
-export function clearIflowHistorySessions(workspacePath: string): Promise<number> {
-  return invoke<number>('clear_iflow_history_sessions', { workspacePath });
+export function clearQwenHistorySessions(workspacePath: string): Promise<number> {
+  return invoke<number>('clear_qwen_history_sessions', { workspacePath });
 }
 
-export function connectIflow(
+export function connectQwen(
   agentId: string,
-  iflowPath: string,
+  qwenPath: string,
   workspacePath: string,
   model: string | null,
-): Promise<ConnectIflowResult> {
-  return invoke<ConnectIflowResult>('connect_iflow', { agentId, iflowPath, workspacePath, model });
+): Promise<ConnectQwenResult> {
+  return invoke<ConnectQwenResult>('connect_qwen', { agentId, qwenPath, workspacePath, model });
 }
 
-export function listIflowHistorySessions(workspacePath: string): Promise<IflowHistorySessionRecord[]> {
-  return invoke<IflowHistorySessionRecord[]>('list_iflow_history_sessions', { workspacePath });
+export function listQwenHistorySessions(workspacePath: string): Promise<QwenHistorySessionRecord[]> {
+  return invoke<QwenHistorySessionRecord[]>('list_qwen_history_sessions', { workspacePath });
 }
 
-export function loadIflowHistoryMessages(
+export function loadQwenHistoryMessages(
   workspacePath: string,
   sessionId: string,
-): Promise<IflowHistoryMessageRecord[]> {
-  return invoke<IflowHistoryMessageRecord[]>('load_iflow_history_messages', {
+): Promise<QwenHistoryMessageRecord[]> {
+  return invoke<QwenHistoryMessageRecord[]>('load_qwen_history_messages', {
     workspacePath,
     sessionId,
   });
@@ -57,26 +56,22 @@ export function disconnectAgent(agentId: string): Promise<void> {
   return invoke('disconnect_agent', { agentId });
 }
 
-export function deleteIflowHistorySession(
+export function deleteQwenHistorySession(
   workspacePath: string,
   sessionId: string,
 ): Promise<boolean> {
-  return invoke<boolean>('delete_iflow_history_session', { workspacePath, sessionId });
+  return invoke<boolean>('delete_qwen_history_session', { workspacePath, sessionId });
 }
 
-export function listAvailableModels(iflowPath: string): Promise<ModelOption[]> {
-  return invoke<ModelOption[]>('list_available_models', { iflowPath });
-}
-
-export function switchAgentModel(
+export function switchQwenModel(
   agentId: string,
-  iflowPath: string,
+  qwenPath: string,
   workspacePath: string,
   model: string,
-): Promise<ConnectIflowResult> {
-  return invoke<ConnectIflowResult>('switch_agent_model', {
+): Promise<ConnectQwenResult> {
+  return invoke<ConnectQwenResult>('switch_qwen_model', {
     agentId,
-    iflowPath,
+    qwenPath,
     workspacePath,
     model,
   });
@@ -124,4 +119,8 @@ export function pickFolder(defaultPath: string | null): Promise<string | null> {
 
 export function discoverSkills(agentType: string): Promise<SkillRuntimeItem[]> {
   return invoke<SkillRuntimeItem[]>('discover_skills', { agentType });
+}
+
+export function listWorkspaceFiles(workspacePath: string): Promise<FileItem[]> {
+  return invoke<FileItem[]>('list_workspace_files', { workspacePath });
 }

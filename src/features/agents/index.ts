@@ -54,7 +54,7 @@ export {
   formatModelList,
   loadAgentModelOptions,
   resolveModelName,
-  switchAgentModel,
+  switchQwenModel,
   toggleCurrentAgentModelMenu,
   onCurrentAgentModelMenuClick,
   toggleCurrentAgentThink,
@@ -89,6 +89,15 @@ export {
   refreshAgentGitChanges,
   refreshCurrentAgentGitChanges,
 } from './git';
+
+// Workspace Files
+export {
+  showWorkspaceFilesForAgent,
+  resetWorkspaceFilesForAgent,
+  refreshAgentWorkspaceFiles,
+  refreshCurrentAgentWorkspaceFiles,
+  insertFilePathAtCursor,
+} from './workspace';
 
 // Reconnect
 export {

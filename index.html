@@ -79,6 +79,10 @@
                   <span class="toolbar-menu-icon">📝</span>
                   <span class="toolbar-menu-text">文件变更</span>
                 </button>
+                <button id="open-workspace-files-btn" class="toolbar-menu-item" aria-label="打开工作目录文件面板">
+                  <span class="toolbar-menu-icon">📁</span>
+                  <span class="toolbar-menu-text">工作目录</span>
+                </button>
                 <button id="open-capability-center-btn" class="toolbar-menu-item" aria-label="打开能力中心">
                   <span class="toolbar-menu-icon">🧩</span>
                   <span class="toolbar-menu-text">能力中心</span>
@@ -128,6 +132,22 @@
               <!-- 文件变更将在这里显示 -->
             </div>
           </div>
+
+          <div id="workspace-files-panel" class="workspace-files-panel hidden">
+            <div class="workspace-files-header">
+              <div class="workspace-files-title-row">
+                <h4>📁 工作目录</h4>
+                <span id="workspace-files-refresh-time" class="workspace-files-refresh-time">未刷新</span>
+              </div>
+              <div class="workspace-files-actions">
+                <button id="refresh-workspace-files" class="btn-icon" title="刷新文件列表" aria-label="刷新文件列表">↻</button>
+                <button id="close-workspace-files-panel" class="btn-icon" title="关闭" aria-label="关闭工作目录面板">×</button>
+              </div>
+            </div>
+            <div id="workspace-files-list" class="workspace-files-list">
+              <!-- 文件列表将在这里显示 -->
+            </div>
+          </div>
         </div>
 
         <!-- 输入区域 -->
@@ -167,17 +187,17 @@
     <div id="add-agent-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="add-agent-modal-title">
       <div class="modal-content">
         <div class="modal-header">
-          <h3 id="add-agent-modal-title">添加 iFlow Agent</h3>
+          <h3 id="add-agent-modal-title">添加 Qwen Agent</h3>
           <button id="close-modal" class="btn-icon" aria-label="关闭添加 Agent 弹窗">×</button>
         </div>
         <div class="modal-body">
           <div class="form-group">
             <label for="agent-name">Agent 名称</label>
-            <input type="text" id="agent-name" placeholder="我的 iFlow" value="iFlow" autocomplete="off">
+            <input type="text" id="agent-name" placeholder="我的 Qwen" value="Qwen" autocomplete="off">
           </div>
           <div class="form-group">
-            <label for="iflow-path">iFlow CLI 路径（可选）</label>
-            <input type="text" id="iflow-path" placeholder="iflow（使用系统 PATH）" autocomplete="off">
+            <label for="iflow-path">Qwen CLI 路径（可选）</label>
+            <input type="text" id="iflow-path" placeholder="qwen（使用系统 PATH）" autocomplete="off">
           </div>
           <div class="form-group">
             <label for="workspace-path">工作目录</label>

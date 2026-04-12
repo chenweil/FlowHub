@@ -4,7 +4,7 @@ import { createEmptyCapabilityEnableMaps, setSkillSuggestionEnabled } from './en
 import { buildSkillCapabilityViewModel } from './skillViewModel';
 
 describe('buildSkillCapabilityViewModel', () => {
-  it('returns unsupported state for non-iflow agent type', () => {
+  it('returns unsupported state for non-qwen agent type', () => {
     const viewModel = buildSkillCapabilityViewModel({
       agentType: 'codex',
       skillRuntimeByAgentType: {},
@@ -19,7 +19,7 @@ describe('buildSkillCapabilityViewModel', () => {
 
   it('returns loading state', () => {
     const viewModel = buildSkillCapabilityViewModel({
-      agentType: 'iflow',
+      agentType: 'qwen',
       skillRuntimeByAgentType: {},
       skillEnabledByAgentType: {},
       loading: true,
@@ -31,7 +31,7 @@ describe('buildSkillCapabilityViewModel', () => {
 
   it('returns error state', () => {
     const viewModel = buildSkillCapabilityViewModel({
-      agentType: 'iflow',
+      agentType: 'qwen',
       skillRuntimeByAgentType: {},
       skillEnabledByAgentType: {},
       loading: false,
@@ -45,35 +45,35 @@ describe('buildSkillCapabilityViewModel', () => {
   it('maps runtime skills and enabled state', () => {
     const runtimeSkills: SkillRuntimeItem[] = [
       {
-        agentType: 'iflow',
+        agentType: 'qwen',
         skillName: 'daily-plan',
         title: 'Daily Plan',
         description: '生成每日计划',
-        path: '/Users/demo/.iflow/skills/daily-plan',
-        source: 'iflow-cli-dir',
+        path: '/Users/demo/.qwen/skills/daily-plan',
+        source: 'qwen-cli-dir',
         discoveredAt: 100,
       },
       {
-        agentType: 'iflow',
+        agentType: 'qwen',
         skillName: 'summarize',
         title: 'Summarize',
         description: '总结长文本',
-        path: '/Users/demo/.iflow/skills/summarize',
-        source: 'iflow-cli-dir',
+        path: '/Users/demo/.qwen/skills/summarize',
+        source: 'qwen-cli-dir',
         discoveredAt: 101,
       },
     ];
     const maps = createEmptyCapabilityEnableMaps();
     maps.skillEnabledByAgentType = setSkillSuggestionEnabled(
       maps.skillEnabledByAgentType,
-      'iflow',
+      'qwen',
       'daily-plan',
       false
     );
 
     const viewModel = buildSkillCapabilityViewModel({
-      agentType: 'iflow',
-      skillRuntimeByAgentType: { iflow: runtimeSkills },
+      agentType: 'qwen',
+      skillRuntimeByAgentType: { qwen: runtimeSkills },
       skillEnabledByAgentType: maps.skillEnabledByAgentType,
       loading: false,
       errorMessage: '',

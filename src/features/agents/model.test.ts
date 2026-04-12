@@ -24,8 +24,7 @@ vi.mock('./ui', () => ({
 }));
 
 vi.mock('../../services/tauri', () => ({
-  listAvailableModels: async () => [],
-  switchAgentModel: async () => ({ success: true, port: 0 }),
+  switchQwenModel: async () => ({ success: true }),
   toggleAgentThink: async () => true,
 }));
 

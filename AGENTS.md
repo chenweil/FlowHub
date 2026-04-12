@@ -1,244 +1,166 @@
-# AGENTS.md - iFlow Workspace
+# AGENTS.md
+
+This file provides guidance to Qoder (qoder.com) when working with code in this repository.
 
 ## Project Overview
 
-Multi-Agent Desktop App built with Tauri 2.0 (Rust backend + TypeScript frontend).
+Flow Hub is a Multi-Agent Desktop App built with Tauri 2.0. It connects to iFlow CLI agents via the ACP (Agent Communication Protocol) over WebSocket, providing chat, session management, model switching, tool call visualization, and git diff inspection.
 
-**Tech Stack:**
-- Frontend: TypeScript + Vite
-- Backend: Rust + Tauri 2.0
-- Build: Tauri CLI
+**Tech Stack:** TypeScript (no framework) + Vite | Rust + Tauri 2.0 + Tokio + tokio-tungstenite
+
+**Prerequisite:** iFlow CLI must be installed and accessible (`iflow --help`).
 
 ---
 
-## Build Commands
-
-### Frontend (TypeScript/Vite)
+## Build & Dev Commands
 
 | Command | Description |
 |---------|-------------|
-| `npm run dev` | Start Vite dev server (port 1420) |
-| `npm run build` | Build frontend for production |
-| `npm run preview` | Preview production build |
-
-### Tauri (Full App)
-
-| Command | Description |
-|---------|-------------|
-| `npm run tauri:dev` | Run app in development mode |
-| `npm run tauri:build` | Build production release |
-| `npm run tauri` | Run Tauri CLI directly |
-
-### Rust Commands
-
-| Command | Description |
-|---------|-------------|
+| `npm run tauri:dev` | Full app dev (runs `npm run clean` then `tauri dev`) |
+| `npm run dev` | Frontend-only dev server on port 1420 |
+| `npm run build` | `tsc && vite build` |
+| `npm run tauri:build` | Production desktop build |
+| `npm test` | Run Vitest frontend tests |
+| `cd src-tauri && cargo check` | Type-check Rust backend |
 | `cd src-tauri && cargo build` | Build Rust backend |
-| `cd src-tauri && cargo run` | Run Rust backend directly |
-| `cd src-tauri && cargo check` | Type-check Rust code |
 | `cd src-tauri && cargo test` | Run Rust tests |
+| `npm run clean` | Kill orphan iFlow/Tauri processes (runs `scripts/clean-dev.js`) |
 
-### Running a Single Test
-
-**Rust:**
+**Run a single Rust test:**
 ```bash
 cd src-tauri && cargo test <test_name>
-# Example: cargo test connect_iflow
+```
+
+**Run a single Vitest test:**
+```bash
+npx vitest run src/features/agents/model.test.ts
 ```
 
 ---
 
-## Code Style Guidelines
+## Architecture
 
-### TypeScript
+### Frontend (src/)
 
-**General:**
-- Use strict TypeScript (`strict: true` in tsconfig.json)
-- Always type function parameters and return values
-- Use `interface` for object shapes, `type` for unions/aliases
+No UI framework — direct DOM manipulation via element references from `dom.ts`. All state lives in a single mutable object (`store.ts`) with no reactivity system; UI updates are triggered explicitly after state mutations.
 
-**Naming:**
-- Variables/functions: camelCase (`agentList`, `sendMessage`)
-- Interfaces/Types: PascalCase (`Agent`, `Message`)
-- Constants: SCREAMING_SNAKE_CASE
-- DOM elements: suffix with `El` (`addAgentBtnEl`, `messageInputEl`)
-
-**Imports:**
-- Use absolute imports from `@tauri-apps/api`
-- Group imports: external → internal → types
-
-```typescript
-// External
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
-
-// Types
-interface Agent { ... }
-
-// Code
+```
+src/
+├── main.ts                 # Bootstrap: load agents, wire events, start periodic save
+├── store.ts                # Central state object + accessor functions
+├── types.ts                # All TypeScript interfaces and type aliases
+├── config.ts               # Timeout constants
+├── dom.ts                  # DOM element references (getElementById wrappers)
+├── features/
+│   ├── app.ts              # Main app logic: event wiring, send/receive, UI orchestration (~68KB)
+│   ├── agents/             # Agent CRUD, model switching, reconnect, tool calls, git, registry
+│   ├── sessions/index.ts   # Session management, history import, title generation
+│   ├── storage/index.ts    # Persistence: serialize/deserialize snapshots via Tauri commands
+│   ├── ui/index.ts         # Rendering: messages, markdown, artifact preview, slash menu
+│   ├── capabilities/       # MCP server & skill enable/disable toggles
+│   ├── contextUsage.ts     # Token estimation & context window progress bar
+│   ├── messageWatchdog.ts  # Send timeout detection
+│   └── historyContinuation.ts  # History continuation toggle
+├── services/
+│   ├── tauri.ts            # Typed wrappers for all Tauri invoke calls
+│   └── events.ts           # Typed Tauri event listeners (stream-message, tool-call, etc.)
+├── lib/
+│   ├── markdown.ts         # Markdown→HTML rendering
+│   ├── tokens.ts           # Token counting heuristics
+│   ├── modelContext.ts     # Model→context-window mapping
+│   ├── contextCompression.ts  # Context compression estimation
+│   ├── html.ts             # HTML escaping
+│   └── utils.ts            # Shared utilities
+└── test/setup.ts           # Vitest setup: localStorage mock
 ```
 
-**Type Annotations:**
-```typescript
-// Good
-const agentList: Agent[] = [];
-function selectAgent(agentId: string): void
-const status: 'connected' | 'disconnected' = 'connected';
+### Backend (src-tauri/src/)
 
-// Avoid
-const agents = [];  // No type
-function getAgent(id) { ... }  // No return type
+```
+src-tauri/src/
+├── main.rs                 # Tauri builder: registers all commands, handles app shutdown
+├── state.rs                # AppState (holds AgentManager + storage lock)
+├── manager.rs              # AgentManager: RwLock<HashMap> of agent instances
+├── models.rs               # Shared data types: AgentInfo, ListenerCommand, ConnectResponse
+├── commands.rs             # All #[tauri::command] handlers
+├── agents/
+│   ├── iflow_adapter.rs    # ACP WebSocket client: connect, RPC, message listener loop
+│   ├── session_params.rs   # ACP RPC parameter builders (initialize, session/new, prompt)
+│   └── mod.rs
+├── router.rs               # ACP message router: dispatches sessionUpdate subtypes to Tauri events
+├── history.rs              # iFlow JSONL history file reader (session-*.jsonl)
+├── storage.rs              # App data dir JSON snapshot persistence
+├── model_resolver.rs       # `iflow --list-models` invocation and output parsing
+├── git.rs                  # `git status` and `git diff` for workspace file changes
+├── artifact.rs             # HTML artifact path resolution and file reading
+├── runtime_env.rs          # PATH resolution for iFlow executable
+└── dialog.rs               # Native folder picker (rfd)
 ```
 
-**Error Handling:**
-- Always use try/catch for async operations
-- Log errors with `console.error`
-- Show user-friendly error messages
+### Key Data Flow
 
-```typescript
-try {
-  const result = await invoke<ConnectResponse>('connect_iflow', {...});
-} catch (error) {
-  console.error('Connection error:', error);
-  showError(`连接错误: ${error}`);
-}
-```
+1. **Connecting:** Frontend calls `connectIflow()` → Rust spawns `iflow --experimental-acp --port <N>` → opens WebSocket to `ws://127.0.0.1:<N>/acp` → runs ACP `initialize` + `session/new` → stores `AgentInstance` with `MessageSender` channel
+2. **Messaging:** Frontend calls `sendMessage()` → Rust sends `ListenerCommand::UserPrompt` through mpsc channel → ACP listener task sends JSON-RPC `session/prompt` → chunks arrive as `sessionUpdate` → `router.rs` dispatches to Tauri events (`stream-message`, `tool-call`, `task-finish`)
+3. **Streaming:** Frontend listens to Tauri events via `services/events.ts` → `features/app.ts` handlers update `state` and call render functions
+4. **Persistence:** Every 30s + on `beforeunload`, frontend builds a `StorageSnapshot` (sessions + messages) and saves via Tauri command to `iflow-session-store-{env}.json` in app data dir
+
+### ACP Protocol
+
+The iFlow agent communicates via JSON-RPC 2.0 over WebSocket. Key RPC methods:
+- `initialize` — handshake with agent capabilities
+- `session/new` — create a new conversation session
+- `session/load` — resume an existing session
+- `session/prompt` — send user message (triggers streaming response)
+- `session/cancel` — abort current generation
+- `about` — query agent metadata (model, capabilities)
+- `commands/list` — list available slash commands
+- `models/list` — list available models
+
+Session update types dispatched by `router.rs`: `agent_message_chunk`, `agent_thought_chunk`, `tool_call`, `tool_call_update`, `plan`, `user_message_chunk`.
+
+### Tauri Event Names
+
+| Event | Direction | Payload |
+|-------|-----------|---------|
+| `stream-message` | Rust → TS | `{ agentId, content, type }` where type is `content\|thought\|system\|plan` |
+| `tool-call` | Rust → TS | `{ agentId, toolCalls: ToolCall[] }` |
+| `task-finish` | Rust → TS | `{ agentId, reason }` |
+| `command-registry` | Rust → TS | `{ agentId, commands, mcpServers }` |
+| `model-registry` | Rust → TS | `{ agentId, models, currentModel }` |
+| `acp-session` | Rust → TS | `{ agentId, sessionId }` |
+| `agent-error` | Rust → TS | `{ agentId, error }` |
 
 ---
 
-### Rust
+## Code Conventions
 
-**General:**
-- Use Rust 2021 edition
-- Enable all lints (`#![deny(warnings)]` in development)
-- Use `anyhow` for application errors, `thiserror` for library errors
+### Frontend
 
-**Naming:**
-- Variables/functions: snake_case (`agent_info`, `connect_iflow`)
-- Structs/Enums: PascalCase (`AgentInfo`, `AgentStatus`)
-- Modules: snake_case
+- **No framework:** All UI is direct DOM manipulation. Element references come from `dom.ts` (`getElementById` wrappers with `El` suffix). Render functions read from `state` and write to DOM.
+- **State pattern:** `store.ts` exports a single mutable `state` object. Mutations are in-place; there is no reactivity. After mutating state, explicitly call render/update functions.
+- **Tauri calls go through `services/tauri.ts`:** Never call `invoke()` directly outside this file. All Tauri commands have typed wrappers there.
+- **Event listeners go through `services/events.ts`:** Typed wrappers for `listen()` calls.
+- **Agent data keyed by agentId:** Sessions in `state.sessionsByAgent`, messages in `state.messagesBySession`, tool calls in `state.toolCallsByAgent`, etc.
+- **Naming:** camelCase for variables/functions, PascalCase for interfaces/types, SCREAMING_SNAKE_CASE for constants.
 
-**Error Handling:**
-- Use `Result<T, String>` for simple cases
-- Propagate errors with `?` operator
-- Provide context in error messages
+### Backend
 
-```rust
-// Good
-let port = find_available_port()
-    .await
-    .map_err(|e| format!("Failed to bind: {}", e))?;
+- **Tauri commands** return `Result<T, String>` and are defined in `commands.rs` (except `storage.rs` and `history.rs` which define their own).
+- **Agent instances** are managed through `AgentManager` (RwLock-wrapped HashMap). Access via `sender_of()`, `upsert()`, `remove()`, `port_of()`.
+- **Message passing:** Each agent has an `mpsc::UnboundedSender<ListenerCommand>` for sending commands to the background WebSocket listener task.
+- **Model switching** tries ACP `models/set` first; falls back to killing and respawning the agent process.
+- **Storage lock:** `AppState.storage_lock` (Mutex) prevents concurrent file access during snapshot save/load.
+- **Process cleanup:** On app exit, `shutdown_all_agents` terminates all child processes (SIGTERM then SIGKILL on Unix).
+- **Naming:** snake_case for functions/variables, PascalCase for structs/enums. Tauri command params use camelCase (auto-converted from snake_case Rust args).
 
-// Bad
-let port = find_available_port().await.unwrap();
-```
+### Frontend Tests
 
-**Async:**
-- Use `tokio` for async runtime
-- Prefer `async/await` over `.and_then()` chains
-- Use appropriate tokio features in Cargo.toml
+- Vitest with jsdom environment. Setup in `src/test/setup.ts` mocks `localStorage`.
+- Test files colocated with source: `*.test.ts` alongside the module they test.
+- No frontend lint command configured. TypeScript strict mode is enabled (`noUnusedLocals`, `noUnusedParameters`).
 
-**Visibility:**
-- Use `pub` only for items that need to be public
-- Keep internal implementation details private
+### Rust Tests
 
----
-
-### HTML/CSS
-
-**HTML:**
-- Use semantic HTML elements
-- Add `data-*` attributes for JavaScript hooks
-- Use `id` for unique elements, `class` for repeated patterns
-
-**CSS:**
-- Keep styles in `src/styles.css`
-- Use utility classes where possible
-- Prefer flexbox/grid over floats
-
----
-
-## Project Structure
-
-```
-iflow-workspace/
-├── src/                    # Frontend TypeScript
-│   ├── main.ts            # Main entry point
-│   └── styles.css         # Styles
-├── src-tauri/             # Rust backend
-│   ├── src/
-│   │   └── main.rs       # Tauri commands & logic
-│   ├── Cargo.toml        # Rust dependencies
-│   └── tauri.conf.json   # Tauri config
-├── package.json          # NPM config
-├── vite.config.ts        # Vite config
-└── tsconfig.json         # TypeScript config
-```
-
----
-
-## Common Patterns
-
-### Tauri Commands
-
-Frontend invokes Rust commands via `invoke`:
-
-```typescript
-const result = await invoke<ConnectResponse>('connect_iflow', {
-  agentId,
-  iflowPath,
-  workspacePath,
-});
-```
-
-Rust defines commands with `#[tauri::command]`:
-
-```rust
-#[tauri::command]
-async fn connect_iflow(
-    app_handle: tauri::AppHandle,
-    state: State<'_, AppState>,
-    agent_id: String,
-    iflow_path: String,
-    workspace_path: String,
-) -> Result<ConnectResponse, String> { ... }
-```
-
-### Event Communication
-
-Frontend listens to events:
-
-```typescript
-listen('stream-message', (event) => {
-  const payload = event.payload as any;
-  // handle
-});
-```
-
-Rust emits events:
-
-```rust
-let _ = app_handle.emit("stream-message", serde_json::json!({
-    "agentId": agent_id,
-    "content": content,
-}));
-```
-
----
-
-## Development Tips
-
-1. **Frontend-only dev:** Run `npm run dev` to test UI
-2. **Full app dev:** Run `npm run tauri:dev`
-3. **Backend debugging:** Check console output in terminal running `tauri:dev`
-4. **WebSocket testing:** Connect to `ws://127.0.0.1:<port>/acp`
-
----
-
-## Testing
-
-Currently no frontend tests. To add tests:
-- Use Vitest for TypeScript unit tests
-- Add test scripts to package.json
-
-Rust tests can be added with `#[cfg(test)]` module in `.rs` files.
+- Inline `#[cfg(test)]` modules in the same `.rs` file.
+- Async tests use `#[tokio::test]`.
+- Some tests create temp directories; clean up after themselves.

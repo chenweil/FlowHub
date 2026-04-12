@@ -13,7 +13,6 @@ mod dialog;
 mod git;
 mod history;
 mod manager;
-mod model_resolver;
 mod models;
 mod router;
 mod runtime_env;
@@ -22,16 +21,15 @@ mod storage;
 
 use artifact::{read_html_artifact, resolve_html_artifact_path};
 use commands::{
-    connect_iflow, discover_skills, disconnect_agent, send_message, shutdown_all_agents, stop_message,
-    switch_agent_model, toggle_agent_think,
+    connect_qwen, discover_skills, disconnect_agent, list_workspace_files, send_message,
+    shutdown_all_agents, stop_message, switch_qwen_model, toggle_agent_think,
 };
 use dialog::pick_folder;
 use git::{list_git_changes, load_git_file_diff};
 use history::{
-    clear_iflow_history_sessions, delete_iflow_history_session, list_iflow_history_sessions,
-    load_iflow_history_messages,
+    clear_qwen_history_sessions, delete_qwen_history_session, list_qwen_history_sessions,
+    load_qwen_history_messages,
 };
-use model_resolver::list_available_models;
 use state::AppState;
 use storage::{load_storage_snapshot, save_storage_snapshot};
 
@@ -39,16 +37,15 @@ fn main() {
     let app = tauri::Builder::default()
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
-            connect_iflow,
+            connect_qwen,
             send_message,
             stop_message,
-            switch_agent_model,
+            switch_qwen_model,
             toggle_agent_think,
-            list_available_models,
-            list_iflow_history_sessions,
-            load_iflow_history_messages,
-            delete_iflow_history_session,
-            clear_iflow_history_sessions,
+            list_qwen_history_sessions,
+            load_qwen_history_messages,
+            delete_qwen_history_session,
+            clear_qwen_history_sessions,
             list_git_changes,
             load_git_file_diff,
             resolve_html_artifact_path,
@@ -58,6 +55,7 @@ fn main() {
             save_storage_snapshot,
             pick_folder,
             discover_skills,
+            list_workspace_files,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

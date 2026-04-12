@@ -6,10 +6,9 @@ export interface Agent {
   type: string;
   status: 'connected' | 'disconnected' | 'connecting' | 'error';
   workspacePath: string;
-  iflowPath?: string;
+  qwenPath?: string;
   selectedModel?: string;
   thinkEnabled?: boolean;
-  port?: number;
 }
 
 export interface Session {
@@ -19,7 +18,7 @@ export interface Session {
   createdAt: Date;
   updatedAt: Date;
   acpSessionId?: string;
-  source?: 'local' | 'iflow-log';
+  source?: 'local' | 'qwen-log';
   messageCountHint?: number;
 }
 
@@ -31,6 +30,19 @@ export interface Message {
   agentId?: string;
   toolCalls?: ToolCall[];
   estimatedTokens?: number;
+}
+
+export interface ReportedContextUsage {
+  usedTokens: number;
+  contextWindow: number;
+  percentage: number;
+  source: 'reported';
+}
+
+export interface AgentActivity {
+  lastUpdatedAt: number;
+  label: string;
+  toolName?: string;
 }
 
 export interface ToolCall {
@@ -59,6 +71,14 @@ export interface GitFileChange {
   unstagedStatus: GitStatus;
 }
 
+export interface FileItem {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size: number;
+  modified_at: number | null;
+}
+
 export interface RegistryCommand {
   name: string;
   description: string;
@@ -76,7 +96,7 @@ export interface SkillRuntimeItem {
   title: string;
   description: string;
   path: string;
-  source: 'iflow-cli-dir';
+  source: 'qwen-cli-dir';
   discoveredAt: number;
 }
 
@@ -109,7 +129,7 @@ export interface StoredSession {
   createdAt: string;
   updatedAt: string;
   acpSessionId?: string;
-  source?: 'local' | 'iflow-log';
+  source?: 'local' | 'qwen-log';
   messageCountHint?: number;
 }
 
@@ -132,7 +152,7 @@ export interface StorageSnapshot {
   draftsBySession?: StoredDraftMap;
 }
 
-export interface IflowHistorySessionRecord {
+export interface QwenHistorySessionRecord {
   sessionId: string;
   title: string;
   createdAt: string;
@@ -140,7 +160,7 @@ export interface IflowHistorySessionRecord {
   messageCount: number;
 }
 
-export interface IflowHistoryMessageRecord {
+export interface QwenHistoryMessageRecord {
   id: string;
   role: 'user' | 'assistant';
   content: string;

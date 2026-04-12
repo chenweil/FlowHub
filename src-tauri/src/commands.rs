@@ -1,13 +1,15 @@
 use std::collections::HashSet;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use tauri::State;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::time::{timeout, Duration};
 
-use crate::agents::iflow_adapter::{find_available_port, message_listener_task};
-use crate::models::{AgentInfo, AgentStatus, ConnectResponse, ListenerCommand, SkillRuntimeItem};
+use crate::agents::qwen_adapter::message_listener_task;
+use crate::models::{AgentInfo, AgentStatus, ConnectResponse, FileItem, ListenerCommand, SkillRuntimeItem};
 use crate::runtime_env::{resolve_executable_path, runtime_path_env};
 use crate::state::{AgentInstance, AppState};
 
@@ -57,77 +59,81 @@ pub async fn shutdown_all_agents(state: &AppState) {
     }
 }
 
-async fn spawn_iflow_agent(
+fn qwen_cli_args(model: Option<&str>) -> Vec<OsString> {
+    let mut args = vec![OsString::from("--acp"), OsString::from("--yolo")];
+
+    if let Some(model_name) = model {
+        let trimmed = model_name.trim();
+        if !trimmed.is_empty() {
+            args.push(OsString::from("--model"));
+            args.push(OsString::from(trimmed));
+        }
+    }
+
+    args
+}
+
+async fn spawn_qwen_agent(
     app_handle: tauri::AppHandle,
     state: &AppState,
     agent_id: String,
-    iflow_path: String,
+    qwen_path: String,
     workspace_path: String,
     model: Option<String>,
 ) -> Result<ConnectResponse, String> {
-    println!("Connecting to iFlow...");
+    println!("Connecting to Qwen...");
     println!("Agent ID: {}", agent_id);
     println!("Workspace: {}", workspace_path);
     if let Some(model_name) = model.as_ref() {
         println!("Model override: {}", model_name);
     }
 
-    // 查找可用端口
-    let port = find_available_port().await?;
-    println!("Using port: {}", port);
-
-    let resolved_iflow_path = resolve_executable_path(&iflow_path)?;
+    let resolved_qwen_path = resolve_executable_path(&qwen_path)?;
     let runtime_path = runtime_path_env()?;
-    println!("Resolved iFlow executable: {}", resolved_iflow_path.display());
+    println!("Resolved Qwen executable: {}", resolved_qwen_path.display());
 
-    // 启动 iFlow 进程
-    let mut cmd = Command::new(&resolved_iflow_path);
+    let mut cmd = Command::new(&resolved_qwen_path);
     cmd.current_dir(&workspace_path)
-        .arg("--experimental-acp")
-        .arg("--port")
-        .arg(port.to_string())
         .env("PATH", runtime_path)
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    cmd.args(qwen_cli_args(model.as_deref()));
 
-    if let Some(model_name) = model.as_ref() {
-        let trimmed = model_name.trim();
-        if !trimmed.is_empty() {
-            cmd.arg("--model").arg(trimmed);
-        }
-    }
-
-    println!("Spawning iFlow process...");
-    let child = cmd
+    println!("Spawning Qwen process...");
+    let mut child = cmd
         .spawn()
-        .map_err(|e| format!("Failed to start iFlow: {}", e))?;
-    println!("iFlow process started, PID: {:?}", child.id());
+        .map_err(|e| format!("Failed to start Qwen: {}", e))?;
+    println!("Qwen process started, PID: {:?}", child.id());
 
-    // 等待 iFlow 启动
-    println!("Waiting for iFlow to initialize...");
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Qwen stdout is not available".to_string())?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "Qwen stdin is not available".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Qwen stderr is not available".to_string())?;
 
-    let ws_url = format!("ws://127.0.0.1:{}/acp", port);
-
-    // 创建消息发送通道
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<ListenerCommand>();
 
-    // 保存 Agent 实例
     let agent_info = AgentInfo {
         id: agent_id.clone(),
-        name: "iFlow".to_string(),
-        agent_type: "iflow".to_string(),
+        name: "Qwen".to_string(),
+        agent_type: "qwen".to_string(),
         status: AgentStatus::Connected,
         workspace_path: workspace_path.clone(),
-        port: Some(port),
     };
 
     let instance = AgentInstance {
         info: agent_info,
         process: Some(child),
-        port,
-        iflow_path: iflow_path.clone(),
+        qwen_path: qwen_path.clone(),
         model: model.clone(),
         message_sender: Some(tx),
     };
@@ -137,60 +143,71 @@ async fn spawn_iflow_agent(
     println!("[connect] Agent saved, total agents: {}", agent_count);
     println!("[connect] Agent IDs: {:?}", agent_ids);
 
-    // 启动后台消息监听任务
     let app_handle_clone = app_handle.clone();
     let agent_id_clone = agent_id.clone();
-    let ws_url_clone = ws_url.clone();
     let workspace_path_clone = workspace_path.clone();
-
     tokio::spawn(async move {
-        message_listener_task(
-            app_handle_clone,
-            agent_id_clone,
-            ws_url_clone,
-            workspace_path_clone,
-            rx,
-        )
-        .await;
+        message_listener_task(app_handle_clone, agent_id_clone, workspace_path_clone, stdout, stdin, rx)
+            .await;
+    });
+
+    let stderr_agent_id = agent_id.clone();
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(stderr).lines();
+        loop {
+            match lines.next_line().await {
+                Ok(Some(line)) => {
+                    let trimmed = line.trim();
+                    if !trimmed.is_empty() {
+                        println!("[qwen:{}][stderr] {}", stderr_agent_id, trimmed);
+                    }
+                }
+                Ok(None) => return,
+                Err(error) => {
+                    println!(
+                        "[qwen:{}][stderr] Failed to read stderr: {}",
+                        stderr_agent_id, error
+                    );
+                    return;
+                }
+            }
+        }
     });
 
     println!("Agent {} connected successfully", agent_id);
 
     Ok(ConnectResponse {
         success: true,
-        port,
         error: None,
     })
 }
 
-/// 连接 iFlow
 #[tauri::command]
-pub async fn connect_iflow(
+pub async fn connect_qwen(
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
     agent_id: String,
-    iflow_path: String,
+    qwen_path: String,
     workspace_path: String,
     model: Option<String>,
 ) -> Result<ConnectResponse, String> {
-    spawn_iflow_agent(
+    spawn_qwen_agent(
         app_handle,
         &state,
         agent_id,
-        iflow_path,
+        qwen_path,
         workspace_path,
         model,
     )
     .await
 }
 
-/// 切换模型（通过重启 ACP 会话生效）
 #[tauri::command]
-pub async fn switch_agent_model(
+pub async fn switch_qwen_model(
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
     agent_id: String,
-    iflow_path: String,
+    qwen_path: String,
     workspace_path: String,
     model: String,
 ) -> Result<ConnectResponse, String> {
@@ -211,35 +228,29 @@ pub async fn switch_agent_model(
             if send_result.is_ok() {
                 match timeout(Duration::from_secs(20), rx).await {
                     Ok(Ok(Ok(_current_model))) => {
-                        let port = state
-                            .agent_manager
-                            .port_of(&agent_id)
-                            .await
-                            .ok_or_else(|| "Agent port not available".to_string())?;
                         return Ok(ConnectResponse {
                             success: true,
-                            port,
                             error: None,
                         });
                     }
                     Ok(Ok(Err(err))) => {
                         println!(
-                            "[switch_agent_model] ACP switch failed, fallback to restart: {}",
+                            "[switch_qwen_model] ACP switch failed, fallback to restart: {}",
                             err
                         );
                     }
                     Ok(Err(_)) => {
                         println!(
-                            "[switch_agent_model] ACP switch response channel closed, fallback to restart"
+                            "[switch_qwen_model] ACP switch response channel closed, fallback to restart"
                         );
                     }
                     Err(_) => {
-                        println!("[switch_agent_model] ACP switch timeout, fallback to restart");
+                        println!("[switch_qwen_model] ACP switch timeout, fallback to restart");
                     }
                 }
             } else {
                 println!(
-                    "[switch_agent_model] Failed to send ACP switch command, fallback to restart"
+                    "[switch_qwen_model] Failed to send ACP switch command, fallback to restart"
                 );
             }
         }
@@ -249,11 +260,11 @@ pub async fn switch_agent_model(
         terminate_agent_instance(&mut instance).await;
     }
 
-    spawn_iflow_agent(
+    spawn_qwen_agent(
         app_handle,
         &state,
         agent_id,
-        iflow_path,
+        qwen_path,
         workspace_path,
         Some(target_model.to_string()),
     )
@@ -440,15 +451,15 @@ fn parse_skill_frontmatter(content: &str) -> (Option<String>, Option<String>) {
     (name, description)
 }
 
-fn resolve_iflow_skill_root() -> Result<PathBuf, String> {
+fn resolve_qwen_skill_root() -> Result<PathBuf, String> {
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
         .ok_or_else(|| "Cannot resolve home directory".to_string())?;
-    Ok(home.join(".iflow").join("skills"))
+    Ok(home.join(".qwen").join("skills"))
 }
 
-fn read_iflow_skills_from_root(root: &Path) -> Result<Vec<SkillRuntimeItem>, String> {
+fn read_qwen_skills_from_root(root: &Path) -> Result<Vec<SkillRuntimeItem>, String> {
     if !root.exists() {
         return Err(format!("技能目录不存在: {}", root.display()));
     }
@@ -504,12 +515,12 @@ fn read_iflow_skills_from_root(root: &Path) -> Result<Vec<SkillRuntimeItem>, Str
         seen.insert(dedupe_key);
 
         skills.push(SkillRuntimeItem {
-            agent_type: "iflow".to_string(),
+            agent_type: "qwen".to_string(),
             skill_name: skill_name.clone(),
             title: skill_name,
             description: manifest_description.unwrap_or_default(),
             path: path.to_string_lossy().to_string(),
-            source: "iflow-cli-dir".to_string(),
+            source: "qwen-cli-dir".to_string(),
             discovered_at: chrono::Utc::now().timestamp_millis(),
         });
     }
@@ -520,17 +531,71 @@ fn read_iflow_skills_from_root(root: &Path) -> Result<Vec<SkillRuntimeItem>, Str
 #[tauri::command]
 pub async fn discover_skills(agent_type: String) -> Result<Vec<SkillRuntimeItem>, String> {
     let normalized_agent_type = normalize_lower_text(&agent_type);
-    if normalized_agent_type != "iflow" {
+    if normalized_agent_type != "qwen" {
         return Ok(Vec::new());
     }
 
-    let root = resolve_iflow_skill_root()?;
-    read_iflow_skills_from_root(&root)
+    let root = resolve_qwen_skill_root()?;
+    read_qwen_skills_from_root(&root)
+}
+
+#[tauri::command]
+pub async fn list_workspace_files(workspace_path: String) -> Result<Vec<FileItem>, String> {
+    let root = Path::new(&workspace_path);
+    if !root.exists() {
+        return Err(format!("工作目录不存在: {}", workspace_path));
+    }
+    if !root.is_dir() {
+        return Err(format!("路径不是目录: {}", workspace_path));
+    }
+
+    let mut files: Vec<FileItem> = Vec::new();
+    let entries = std::fs::read_dir(root)
+        .map_err(|e| format!("读取目录失败: {}", e))?
+        .filter_map(|entry| entry.ok());
+
+    for entry in entries {
+        let file_name = entry.file_name();
+        let name = file_name.to_string_lossy().to_string();
+
+        // 跳过隐藏文件
+        if name.starts_with('.') {
+            continue;
+        }
+
+        let path = entry.path();
+        let metadata = entry.metadata().ok();
+        let is_dir = path.is_dir();
+        let size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
+        let modified_at = metadata
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64);
+
+        files.push(FileItem {
+            name,
+            path: path.to_string_lossy().to_string(),
+            is_dir,
+            size,
+            modified_at,
+        });
+    }
+
+    // 按文件夹优先，然后按名称排序
+    files.sort_by(|a, b| {
+        match (a.is_dir, b.is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        }
+    });
+
+    Ok(files)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_skill_frontmatter, read_iflow_skills_from_root};
+    use super::{parse_skill_frontmatter, qwen_cli_args, read_qwen_skills_from_root};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn make_temp_dir_name(tag: &str) -> String {
@@ -555,7 +620,20 @@ description: "Generate daily plan"
     }
 
     #[test]
-    fn read_iflow_skills_dedupes_by_name_case_insensitive() {
+    fn qwen_cli_args_enable_yolo_mode() {
+        let args = qwen_cli_args(Some("qwen-max"));
+        let args = args
+            .iter()
+            .map(|item| item.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+
+        assert!(args.iter().any(|item| item == "--acp"));
+        assert!(args.iter().any(|item| item == "--yolo"));
+        assert!(args.windows(2).any(|pair| pair == ["--model", "qwen-max"]));
+    }
+
+    #[test]
+    fn read_qwen_skills_dedupes_by_name_case_insensitive() {
         let temp_root = std::env::temp_dir().join(make_temp_dir_name("skills"));
         std::fs::create_dir_all(&temp_root).expect("create temp root");
 
@@ -574,7 +652,7 @@ description: "Generate daily plan"
         )
         .expect("write second skill");
 
-        let skills = read_iflow_skills_from_root(&temp_root).expect("read skills");
+        let skills = read_qwen_skills_from_root(&temp_root).expect("read skills");
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].skill_name, "Daily-Plan");
 

@@ -19,9 +19,20 @@ function formatTokenCount(tokens: number): string {
     return `${(tokens / 1_000_000).toFixed(1)}M`;
   }
   if (tokens >= 1_000) {
-    return `${Math.round(tokens / 1_000)}K`;
+    const compact = tokens / 1_000;
+    return `${compact >= 10 ? Math.round(compact) : compact.toFixed(1).replace(/\.0$/, '')}K`;
   }
   return String(tokens);
+}
+
+function formatUsagePercentage(percentage: number): string {
+  if (!Number.isFinite(percentage) || percentage <= 0) {
+    return '0%';
+  }
+  if (percentage < 10) {
+    return `${percentage.toFixed(1).replace(/\.0$/, '')}%`;
+  }
+  return `${Math.round(percentage)}%`;
 }
 
 /**
@@ -51,8 +62,9 @@ export function updateContextUsageDisplay(): void {
     return;
   }
 
+  const reportedUsage = state.contextUsageBySession[state.currentSessionId] || null;
   const contextWindow = getContextWindow(agent.selectedModel);
-  const usage = calculateContextUsage(state.messages, contextWindow);
+  const usage = reportedUsage || calculateContextUsage(state.messages, contextWindow);
   const pct = Math.min(usage.percentage, 100);
 
   // Show wrapper
@@ -75,7 +87,7 @@ export function updateContextUsageDisplay(): void {
 
   // Text label
   if (contextUsageTextEl) {
-    contextUsageTextEl.textContent = `${Math.round(usage.percentage)}%`;
+    contextUsageTextEl.textContent = formatUsagePercentage(usage.percentage);
     contextUsageTextEl.className = `context-usage-text ${colorClass}`;
   }
 
@@ -93,7 +105,8 @@ export function updateContextUsageDisplay(): void {
   contextUsageWrapperEl.classList.toggle('context-usage-disabled', !canCompress);
   contextUsageWrapperEl.setAttribute('aria-disabled', String(!canCompress));
 
-  const baseTooltip = `上下文: ${formatTokenCount(usage.usedTokens)}/${formatTokenCount(usage.contextWindow)} (${Math.round(usage.percentage)}%, 估算)`;
+  const usageSourceLabel = reportedUsage ? '真实' : '估算';
+  const baseTooltip = `上下文: ${formatTokenCount(usage.usedTokens)}/${formatTokenCount(usage.contextWindow)} (${formatUsagePercentage(usage.percentage)}, ${usageSourceLabel})`;
   const tooltip = canCompress
     ? `${baseTooltip}，点击压缩`
     : disabledReason

@@ -26,14 +26,14 @@ export function inferLegacyHistorySessionId(agentId: string, sessionId: string):
     return null;
   }
   const candidate = sessionId.slice(prefix.length).trim();
-  if (!candidate.startsWith('session-')) {
+  if (!candidate) {
     return null;
   }
   return candidate;
 }
 
-export function isIflowHistorySessionId(sessionId: string | undefined): boolean {
-  return Boolean(sessionId && sessionId.trim().startsWith('session-'));
+export function isQwenHistorySessionId(sessionId: string | undefined): boolean {
+  return Boolean(sessionId && sessionId.trim().length > 0);
 }
 
 export function dedupeSessionsByIdentity(sessionList: Session[]): Session[] {
@@ -57,6 +57,95 @@ export function dedupeSessionsByIdentity(sessionList: Session[]): Session[] {
   return deduped;
 }
 
+function isGenericSessionTitle(title: string | undefined): boolean {
+  const normalized = String(title || '').trim();
+  if (!normalized) {
+    return true;
+  }
+  return normalized === '默认会话' || normalized === '历史会话' || /^会话\s+\d+$/.test(normalized);
+}
+
+function isLikelyDuplicateHistoryPair(local: Session, history: Session): boolean {
+  if (local.source === 'qwen-log' || history.source !== 'qwen-log') {
+    return false;
+  }
+  if (!history.acpSessionId?.trim()) {
+    return false;
+  }
+  if (local.acpSessionId?.trim() === history.acpSessionId.trim()) {
+    return false;
+  }
+
+  const updatedAtDelta = Math.abs(local.updatedAt.getTime() - history.updatedAt.getTime());
+  if (updatedAtDelta > 1_000) {
+    return false;
+  }
+
+  const createdAtDelta = Math.abs(local.createdAt.getTime() - history.createdAt.getTime());
+  if (createdAtDelta > 60_000) {
+    return false;
+  }
+
+  const localCount = typeof local.messageCountHint === 'number' ? local.messageCountHint : null;
+  const historyCount = typeof history.messageCountHint === 'number' ? history.messageCountHint : null;
+  if (localCount != null && historyCount != null && localCount !== historyCount) {
+    return false;
+  }
+
+  return true;
+}
+
+export function mergeLikelyDuplicateSessions(
+  sessionList: Session[]
+): { sessions: Session[]; removedSessionIds: string[] } {
+  const working = [...sessionList];
+  const removedSessionIds = new Set<string>();
+  const historySessions = working
+    .filter((session) => session.source === 'qwen-log')
+    .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+
+  for (const history of historySessions) {
+    if (removedSessionIds.has(history.id)) {
+      continue;
+    }
+
+    const local = working.find(
+      (candidate) =>
+        candidate.id !== history.id &&
+        !removedSessionIds.has(candidate.id) &&
+        isLikelyDuplicateHistoryPair(candidate, history)
+    );
+    if (!local || !history.acpSessionId) {
+      continue;
+    }
+
+    local.acpSessionId = history.acpSessionId;
+    if (history.createdAt.getTime() < local.createdAt.getTime()) {
+      local.createdAt = history.createdAt;
+    }
+    if (history.updatedAt.getTime() > local.updatedAt.getTime()) {
+      local.updatedAt = history.updatedAt;
+    }
+    if (
+      typeof history.messageCountHint === 'number' &&
+      history.messageCountHint >= 0 &&
+      (local.messageCountHint == null || history.messageCountHint > local.messageCountHint)
+    ) {
+      local.messageCountHint = history.messageCountHint;
+    }
+    if (isGenericSessionTitle(local.title) && history.title?.trim()) {
+      local.title = history.title;
+    }
+
+    removedSessionIds.add(history.id);
+  }
+
+  return {
+    sessions: working.filter((session) => !removedSessionIds.has(session.id)),
+    removedSessionIds: [...removedSessionIds],
+  };
+}
+
 // ── Session factory ───────────────────────────────────────────────────────────
 
 export function createSession(agentId: string, title = '新会话'): Session {
@@ -75,6 +164,7 @@ export function createSession(agentId: string, title = '新会话'): Session {
 // ── Serialization ─────────────────────────────────────────────────────────────
 
 export function parseStoredSession(session: StoredSession): Session {
+  const legacySource = String((session as StoredSession & { source?: string }).source || '').trim();
   const normalizedTitle =
     typeof session.title === 'string' && session.title.trim().length > 0
       ? session.title
@@ -85,16 +175,16 @@ export function parseStoredSession(session: StoredSession): Session {
       : undefined;
   const inferredAcpSessionId = inferLegacyHistorySessionId(session.agentId, session.id) || undefined;
   const normalizedAcpSessionId =
-    session.source === 'iflow-log'
-      ? isIflowHistorySessionId(rawAcpSessionId)
+    legacySource === 'iflow-log' || legacySource === 'qwen-log'
+      ? isQwenHistorySessionId(rawAcpSessionId)
         ? rawAcpSessionId
         : inferredAcpSessionId
       : rawAcpSessionId || inferredAcpSessionId;
   const normalizedSource =
-    session.source === 'iflow-log'
-      ? 'iflow-log'
+    legacySource === 'iflow-log' || legacySource === 'qwen-log'
+      ? 'qwen-log'
       : normalizedAcpSessionId && session.id === buildHistorySessionLocalId(session.agentId, normalizedAcpSessionId)
-        ? 'iflow-log'
+        ? 'qwen-log'
         : 'local';
 
   return {
@@ -153,9 +243,9 @@ export function buildStoredSessionMap(): StoredSessionMap {
 export function buildStoredMessageMap(): StoredMessageMap {
   const payload: StoredMessageMap = {};
   for (const [sessionId, sessionMessages] of Object.entries(state.messagesBySession)) {
-    // Skip iflow-log sessions (not persisted locally)
+    // Skip qwen-log sessions (not persisted locally)
     const session = findSessionByIdInState(sessionId);
-    if (session?.source === 'iflow-log') {
+    if (session?.source === 'qwen-log') {
       continue;
     }
     payload[sessionId] = sessionMessages.map(toStoredMessage);
@@ -219,7 +309,7 @@ export function persistCurrentSessionMessages() {
   }));
 
   const session = findSessionByIdInState(state.currentSessionId);
-  if (session?.source === 'iflow-log') {
+  if (session?.source === 'qwen-log') {
     return;
   }
   void saveSessionMessages();

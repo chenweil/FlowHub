@@ -1,5 +1,5 @@
 // src/features/agents/reconnect.ts — auto-reconnect logic for saved agents
-import { connectIflow } from '../../services/tauri';
+import { connectQwen } from '../../services/tauri';
 import type { Agent } from '../../types';
 import { state } from '../../store';
 import { readLastConnectedAgentId, markLastConnectedAgent, normalizeConnectionErrorMessage } from './utils';
@@ -68,9 +68,13 @@ async function reconnectAgentWithOptions(
   }
 
   try {
-    const result = await connectIflow(agent.id, agent.iflowPath || 'iflow', agent.workspacePath, agent.selectedModel || null);
+    await connectQwen(
+      agent.id,
+      agent.qwenPath || 'qwen',
+      agent.workspacePath,
+      agent.selectedModel || null
+    );
 
-    agent.port = result.port;
     agent.status = 'connected';
 
     updateAgentStatusUI('connected');

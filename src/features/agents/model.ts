@@ -1,5 +1,5 @@
 // src/features/agents/model.ts — Model management
-import { listAvailableModels, switchAgentModel as tauriSwitchAgentModel, toggleAgentThink as tauriToggleAgentThink } from '../../services/tauri';
+import { switchQwenModel as tauriSwitchQwenModel, toggleAgentThink as tauriToggleAgentThink } from '../../services/tauri';
 import type { Agent, Message, ModelOption, ParsedModelSlashCommand } from '../../types';
 import { state } from '../../store';
 import { readErrorMessage, readTextFromUnknown, isThinkUnsupportedError, getThinkSupportByModel, setThinkSupportByModel, showError, showSuccess } from './utils';
@@ -88,22 +88,11 @@ export async function loadAgentModelOptions(agent: Agent, forceRefresh = false):
     return state.modelOptionsCacheByAgent[agent.id];
   }
 
-  try {
-    const raw = await listAvailableModels(agent.iflowPath || 'iflow');
-    const normalized = Array.isArray(raw)
-      ? raw.map((item) => normalizeModelOption(item)).filter((item): item is ModelOption => Boolean(item))
-      : [];
-    if (normalized.length > 0) {
-      state.modelOptionsCacheByAgent[agent.id] = normalized;
-      if (state.currentAgentId === agent.id) {
-        updateCurrentAgentModelUI();
-      }
-    }
-    return normalized;
-  } catch (error) {
-    console.error('Load model list error:', error);
-    return [];
+  const cached = state.modelOptionsCacheByAgent[agent.id] || [];
+  if (cached.length > 0 && state.currentAgentId === agent.id) {
+    updateCurrentAgentModelUI();
   }
+  return cached;
 }
 
 // ── Model Switching ───────────────────────────────────────────────────────────
@@ -144,7 +133,7 @@ export function resolveModelName(input: string, models: ModelOption[]): {
   return { modelName: normalized, fromIndex: false, invalidIndex: false, fromAlias: false };
 }
 
-export async function switchAgentModel(agent: Agent, modelName: string): Promise<string | null> {
+export async function switchQwenModel(agent: Agent, modelName: string): Promise<string | null> {
   const targetModel = modelName.trim();
   if (!targetModel) {
     return '模型名称不能为空';
@@ -161,14 +150,18 @@ export async function switchAgentModel(agent: Agent, modelName: string): Promise
   });
 
   try {
-    const result = await tauriSwitchAgentModel(agent.id, agent.iflowPath || 'iflow', agent.workspacePath, targetModel);
+    const result = await tauriSwitchQwenModel(
+      agent.id,
+      agent.qwenPath || 'qwen',
+      agent.workspacePath,
+      targetModel
+    );
 
     if (!result.success) {
       throw new Error(result.error || '模型切换失败');
     }
 
     agent.status = 'connected';
-    agent.port = result.port;
     agent.selectedModel = targetModel;
     if (agent.thinkEnabled) {
       try {
@@ -264,7 +257,7 @@ export async function onCurrentAgentModelMenuClick(event: MouseEvent) {
   }
 
   closeCurrentAgentModelMenu();
-  const error = await switchAgentModel(agent, modelName);
+  const error = await switchQwenModel(agent, modelName);
   if (error) {
     showError(`模型切换失败：${error}`);
     return;
@@ -395,7 +388,7 @@ export async function handleLocalModelCommand(
     const listText =
       modelOptions.length > 0
         ? formatModelList(modelOptions, command.filterKeyword)
-        : '⚠ 当前无法读取 iFlow 模型列表。\n你仍可使用 /model <模型名> 直接切换。';
+        : '⚠ 当前尚未收到 Qwen 模型列表。\n你仍可使用 /model <模型名> 直接切换。';
     const helpMessage: Message = {
       id: `msg-${Date.now()}-model-help`,
       role: 'system',
@@ -448,7 +441,7 @@ export async function handleLocalModelCommand(
   sessionMessages.push(progressMessage);
   commitSessionMessages(sessionId, sessionMessages);
 
-  const switchError = await switchAgentModel(agent, modelName);
+  const switchError = await switchQwenModel(agent, modelName);
   if (!switchError) {
     progressMessage.content = `✅ 已切换到模型：${modelName}`;
     if (resolved.fromIndex) {

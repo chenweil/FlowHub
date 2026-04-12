@@ -29,7 +29,7 @@ export function buildSkillCapabilityViewModel(
   params: BuildSkillCapabilityViewModelParams
 ): SkillCapabilityViewModel {
   const agentType = normalizeAgentType(params.agentType);
-  if (agentType !== 'iflow') {
+  if (agentType !== 'qwen') {
     return {
       state: 'unsupported',
       errorMessage: '',

@@ -24,6 +24,15 @@ async function init() {
   updateCurrentAgentModelUI();
   updateCurrentAgentThinkUI();
   refreshComposerState();
+
+  setInterval(() => {
+    if (!state.currentAgentId) {
+      return;
+    }
+    if (state.inflightSessionByAgent[state.currentAgentId]) {
+      refreshComposerState();
+    }
+  }, 1000);
   
   // 定期保存（每30秒）
   setInterval(() => {

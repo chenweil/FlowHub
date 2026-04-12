@@ -1,22 +1,23 @@
 // src/features/sessions/index.ts — session management, history sync, and title generation
 import {
-  clearIflowHistorySessions,
-  listIflowHistorySessions,
-  loadIflowHistoryMessages,
-  deleteIflowHistorySession,
+  clearQwenHistorySessions,
+  listQwenHistorySessions,
+  loadQwenHistoryMessages,
+  deleteQwenHistorySession,
 } from '../../services/tauri';
 import { escapeHtml } from '../../lib/html';
 import { normalizeTitleSource } from '../../lib/markdown';
 import { formatSessionMeta } from '../../lib/utils';
 import { showConfirmDialog } from '../../dom';
-import type { Agent, Session, Message, IflowHistoryMessageRecord } from '../../types';
+import type { Agent, Session, Message, QwenHistoryMessageRecord } from '../../types';
 import { state } from '../../store';
 import { sessionListEl } from '../../dom';
 import {
   buildHistorySessionLocalId,
   inferLegacyHistorySessionId,
-  isIflowHistorySessionId,
+  isQwenHistorySessionId,
   dedupeSessionsByIdentity,
+  mergeLikelyDuplicateSessions,
   createSession,
   saveSessions,
   saveSessionMessages,
@@ -42,6 +43,15 @@ const TITLE_GENERIC_PHRASES = new Set<string>([
 
 // ── Session ACP binding ───────────────────────────────────────────────────────
 
+function applyPendingAcpSessionBinding(agentId: string): void {
+  const pendingSessionId = state.pendingAcpSessionIdByAgent[agentId];
+  if (!pendingSessionId) {
+    return;
+  }
+  delete state.pendingAcpSessionIdByAgent[agentId];
+  applyAcpSessionBinding(agentId, pendingSessionId);
+}
+
 export function applyAcpSessionBinding(agentId: string, acpSessionId: string) {
   const normalizedSessionId = acpSessionId.trim();
   if (!normalizedSessionId) {
@@ -56,15 +66,20 @@ export function applyAcpSessionBinding(agentId: string, acpSessionId: string) {
   let targetSession = preferredSessionId
     ? sessionList.find((item) => item.id === preferredSessionId)
     : null;
+  if (!targetSession && sessionList.length === 1) {
+    targetSession = sessionList[0];
+  }
   if (!targetSession) {
     targetSession = sessionList.find((item) => item.acpSessionId === normalizedSessionId) || null;
   }
   if (!targetSession) {
+    state.pendingAcpSessionIdByAgent[agentId] = normalizedSessionId;
     return;
   }
+  delete state.pendingAcpSessionIdByAgent[agentId];
 
-  // iFlow 历史会话的 sessionId 绑定到磁盘日志文件名，不应被运行时 ACP session 覆盖。
-  if (targetSession.source === 'iflow-log') {
+  // Qwen 历史会话的 sessionId 绑定到磁盘日志文件名，不应被运行时 ACP session 覆盖。
+  if (targetSession.source === 'qwen-log') {
     return;
   }
 
@@ -135,9 +150,9 @@ export async function clearCurrentAgentSessions() {
 
   let deletedHistoryCount = 0;
   try {
-    deletedHistoryCount = await clearIflowHistorySessions(agent.workspacePath);
+    deletedHistoryCount = await clearQwenHistorySessions(agent.workspacePath);
   } catch (error) {
-    console.error('Clear iFlow history sessions error:', error);
+    console.error('Clear Qwen history sessions error:', error);
     showError(`清除磁盘历史记录失败: ${String(error)}`);
     return;
   }
@@ -145,6 +160,7 @@ export async function clearCurrentAgentSessions() {
   const removedSessions = state.sessionsByAgent[state.currentAgentId] || [];
   for (const session of removedSessions) {
     delete state.messagesBySession[session.id];
+    delete state.contextUsageBySession[session.id];
   }
   state.sessionsByAgent[state.currentAgentId] = [];
   state.currentSessionId = null;
@@ -224,20 +240,20 @@ export async function deleteSession(sessionId: string) {
   if (!targetSession) {
     return;
   }
-  if (targetSession.source === 'iflow-log' && !targetSession.acpSessionId) {
+  if (targetSession.source === 'qwen-log' && !targetSession.acpSessionId) {
     showError('历史会话缺少 sessionId，无法删除磁盘记录');
     return;
   }
 
   if (targetSession.acpSessionId) {
     try {
-      const deleted = await deleteIflowHistorySession(agent.workspacePath, targetSession.acpSessionId);
-      if (targetSession.source === 'iflow-log' && !deleted) {
+      const deleted = await deleteQwenHistorySession(agent.workspacePath, targetSession.acpSessionId);
+      if (targetSession.source === 'qwen-log' && !deleted) {
         showError('未找到对应历史会话文件，未执行删除');
         return;
       }
     } catch (error) {
-      console.error('Delete iFlow history session error:', error);
+      console.error('Delete Qwen history session error:', error);
       showError(`删除磁盘历史记录失败: ${String(error)}`);
       return;
     }
@@ -245,6 +261,7 @@ export async function deleteSession(sessionId: string) {
 
   state.sessionsByAgent[state.currentAgentId] = currentSessions.filter((session) => session.id !== sessionId);
   delete state.messagesBySession[sessionId];
+  delete state.contextUsageBySession[sessionId];
 
   if (state.sessionsByAgent[state.currentAgentId].length === 0) {
     const fallback = createSession(state.currentAgentId, '默认会话');
@@ -335,6 +352,7 @@ export async function clearChat() {
 
   state.messages = [];
   state.messagesBySession[state.currentSessionId] = [];
+  delete state.contextUsageBySession[state.currentSessionId];
   clearDraft(state.currentSessionId);
   touchCurrentSession();
   void Promise.all([import('../ui'), import('../app')]).then(([{ renderMessages }, { refreshComposerState }]) => {
@@ -367,16 +385,16 @@ export function selectSession(sessionId: string) {
   state.currentSessionId = sessionId;
   const cachedMessages = getMessagesForSession(sessionId);
   state.messages = cachedMessages;
-  if (session.source === 'iflow-log' && cachedMessages.length === 0) {
+  if (session.source === 'qwen-log' && cachedMessages.length === 0) {
     state.messages = [
       {
         id: `msg-${Date.now()}-history-loading`,
         role: 'system',
-        content: '正在加载 iFlow 历史会话内容...',
+        content: '正在加载 Qwen 历史会话内容...',
         timestamp: new Date(),
       },
     ];
-    void loadIflowHistoryMessagesForSession(session);
+    void loadQwenHistoryMessagesForSession(session);
   }
   renderSessionList();
   void Promise.all([import('../ui'), import('../app')]).then(([{ renderMessages, restoreScrollPosition }, { refreshComposerState }]) => {
@@ -394,12 +412,14 @@ export function ensureAgentHasSessions(agentId: string) {
     state.sessionsByAgent[agentId] = [];
   }
   if (state.sessionsByAgent[agentId].length > 0) {
+    applyPendingAcpSessionBinding(agentId);
     return;
   }
 
   const session = createSession(agentId, '默认会话');
   state.sessionsByAgent[agentId] = [session];
   state.messagesBySession[session.id] = [];
+  applyPendingAcpSessionBinding(agentId);
 }
 
 export function getSessionsForAgent(agentId: string): Session[] {
@@ -634,7 +654,7 @@ export function makeSessionTitle(content: string): string {
   return `${oneLine.slice(0, 18)}...`;
 }
 
-// ── iFlow history parsing helpers ─────────────────────────────────────────────
+// ── Qwen history parsing helpers ──────────────────────────────────────────────
 
 export function parseDateOrNow(raw: string | Date): Date {
   if (raw instanceof Date) {
@@ -661,7 +681,7 @@ export function splitThinkTaggedContent(rawContent: string): { thoughts: string[
   return { thoughts, answer };
 }
 
-export function expandIflowHistoryMessageRecord(item: IflowHistoryMessageRecord): Message[] {
+export function expandQwenHistoryMessageRecord(item: QwenHistoryMessageRecord): Message[] {
   const baseTimestamp = parseDateOrNow(item.timestamp);
   const baseId = String(item.id || '').trim() || `history-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const content = String(item.content || '').trim();
@@ -707,15 +727,15 @@ export function expandIflowHistoryMessageRecord(item: IflowHistoryMessageRecord)
   return expanded;
 }
 
-// ── iFlow history sync ────────────────────────────────────────────────────────
+// ── Qwen history sync ─────────────────────────────────────────────────────────
 
-export async function syncIflowHistorySessions(agent: Agent): Promise<void> {
+export async function syncQwenHistorySessions(agent: Agent): Promise<void> {
   if (agent.status !== 'connected') {
     return;
   }
 
   try {
-    const histories = await listIflowHistorySessions(agent.workspacePath);
+    const histories = await listQwenHistorySessions(agent.workspacePath);
     const historyList = Array.isArray(histories) ? histories : [];
 
     ensureAgentHasSessions(agent.id);
@@ -738,13 +758,13 @@ export async function syncIflowHistorySessions(agent: Agent): Promise<void> {
       if (existing) {
         if (
           !existing.acpSessionId ||
-          (existing.source === 'iflow-log' && !isIflowHistorySessionId(existing.acpSessionId))
+          (existing.source === 'qwen-log' && !isQwenHistorySessionId(existing.acpSessionId))
         ) {
           existing.acpSessionId = acpSessionId;
           changed = true;
         }
-        if (existing.source !== 'iflow-log' && existing.id === expectedHistorySessionId) {
-          existing.source = 'iflow-log';
+        if (existing.source !== 'qwen-log' && existing.id === expectedHistorySessionId) {
+          existing.source = 'qwen-log';
           changed = true;
         }
         const nextUpdatedAt = parseDateOrNow(history.updatedAt);
@@ -752,7 +772,7 @@ export async function syncIflowHistorySessions(agent: Agent): Promise<void> {
           existing.updatedAt = nextUpdatedAt;
           changed = true;
         }
-        if (existing.source === 'iflow-log' && history.title && existing.title !== history.title) {
+        if (existing.source === 'qwen-log' && history.title && existing.title !== history.title) {
           existing.title = history.title;
           changed = true;
         }
@@ -774,7 +794,7 @@ export async function syncIflowHistorySessions(agent: Agent): Promise<void> {
         createdAt: parseDateOrNow(history.createdAt),
         updatedAt: parseDateOrNow(history.updatedAt),
         acpSessionId,
-        source: 'iflow-log',
+        source: 'qwen-log',
         messageCountHint:
           typeof history.messageCount === 'number' && history.messageCount >= 0
             ? history.messageCount
@@ -785,7 +805,7 @@ export async function syncIflowHistorySessions(agent: Agent): Promise<void> {
     }
 
     const staleHistorySessions = sessionList.filter((item) => {
-      if (item.source !== 'iflow-log') {
+      if (item.source !== 'qwen-log') {
         return false;
       }
 
@@ -810,8 +830,20 @@ export async function syncIflowHistorySessions(agent: Agent): Promise<void> {
     }
 
     const normalizedSessionList = state.sessionsByAgent[agent.id] || [];
-    const dedupedSessions = dedupeSessionsByIdentity(normalizedSessionList);
-    if (dedupedSessions.length !== normalizedSessionList.length) {
+    const mergedSessions = mergeLikelyDuplicateSessions(normalizedSessionList);
+    if (mergedSessions.removedSessionIds.length > 0) {
+      state.sessionsByAgent[agent.id] = mergedSessions.sessions;
+      for (const sessionId of mergedSessions.removedSessionIds) {
+        delete state.messagesBySession[sessionId];
+        delete state.contextUsageBySession[sessionId];
+      }
+      changed = true;
+      messagesChanged = true;
+    }
+
+    const reconciledSessionList = state.sessionsByAgent[agent.id] || [];
+    const dedupedSessions = dedupeSessionsByIdentity(reconciledSessionList);
+    if (dedupedSessions.length !== reconciledSessionList.length) {
       state.sessionsByAgent[agent.id] = dedupedSessions;
       changed = true;
       const liveIds = new Set(dedupedSessions.map((item) => item.id));
@@ -861,15 +893,15 @@ export async function syncIflowHistorySessions(agent: Agent): Promise<void> {
       }
     }
   } catch (error) {
-    console.error('Sync iFlow history sessions error:', error);
+    console.error('Sync Qwen history sessions error:', error);
   }
 }
 
-export async function loadIflowHistoryMessagesForSession(session: Session): Promise<void> {
+export async function loadQwenHistoryMessagesForSession(session: Session): Promise<void> {
   let effectiveSessionId = session.acpSessionId?.trim() || '';
-  if (!isIflowHistorySessionId(effectiveSessionId)) {
+  if (!isQwenHistorySessionId(effectiveSessionId)) {
     const inferred = inferLegacyHistorySessionId(session.agentId, session.id);
-    if (inferred && isIflowHistorySessionId(inferred)) {
+    if (inferred && isQwenHistorySessionId(inferred)) {
       effectiveSessionId = inferred;
       if (session.acpSessionId !== inferred) {
         session.acpSessionId = inferred;
@@ -880,7 +912,7 @@ export async function loadIflowHistoryMessagesForSession(session: Session): Prom
       }
     }
   }
-  if (!isIflowHistorySessionId(effectiveSessionId)) {
+  if (!isQwenHistorySessionId(effectiveSessionId)) {
     if (state.currentSessionId === session.id) {
       state.messages = [
         {
@@ -903,14 +935,14 @@ export async function loadIflowHistoryMessagesForSession(session: Session): Prom
   }
 
   try {
-    const rawMessages = await loadIflowHistoryMessages(agent.workspacePath, effectiveSessionId);
+    const rawMessages = await loadQwenHistoryMessages(agent.workspacePath, effectiveSessionId);
 
     const normalized: Message[] = (Array.isArray(rawMessages) ? rawMessages : [])
-      .flatMap((item) => expandIflowHistoryMessageRecord(item))
+      .flatMap((item) => expandQwenHistoryMessageRecord(item))
       .filter((item) => item.content.trim().length > 0);
 
     state.messagesBySession[session.id] = normalized;
-    if (session.source === 'iflow-log') {
+    if (session.source === 'qwen-log') {
       session.messageCountHint = normalized.filter(
         (item) => item.role === 'user' || item.role === 'assistant'
       ).length;
@@ -927,10 +959,10 @@ export async function loadIflowHistoryMessagesForSession(session: Session): Prom
       renderSessionList();
     }
   } catch (error) {
-    console.error('Load iFlow history messages error:', error);
+    console.error('Load Qwen history messages error:', error);
     const detail = String(error);
     const isMissingHistoryFile =
-      session.source === 'iflow-log' && detail.includes('Session file not found for');
+      session.source === 'qwen-log' && detail.includes('Session file not found for');
 
     if (isMissingHistoryFile) {
       const scopedSessions = state.sessionsByAgent[session.agentId] || [];

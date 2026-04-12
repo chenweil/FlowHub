@@ -1726,6 +1726,22 @@ body {
   padding: 10px 12px;
 }
 
+.tool-calls-summary {
+  border: 1px solid rgba(56, 139, 253, 0.28);
+  background: rgba(56, 139, 253, 0.08);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.6;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+}
+
+.tool-calls-summary.is-stalled {
+  border-color: rgba(210, 153, 34, 0.32);
+  background: rgba(210, 153, 34, 0.1);
+}
+
 .tool-call-item {
   background: var(--bg-tertiary);
   border: 1px solid var(--border-color);
@@ -1897,6 +1913,116 @@ body {
   color: var(--git-status-unknown);
   border-color: var(--git-status-unknown-border);
   background: var(--git-status-unknown-bg);
+}
+
+/* 工作目录文件面板 */
+.workspace-files-panel {
+  width: clamp(260px, 30vw, 360px);
+  min-width: 240px;
+  max-width: 48vw;
+  background: var(--bg-secondary);
+  border-left: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+}
+
+.workspace-files-panel.hidden {
+  display: none;
+}
+
+.workspace-files-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.workspace-files-header h4 {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.workspace-files-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workspace-files-refresh-time {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.workspace-files-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.workspace-files-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.workspace-files-state {
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 10px 12px;
+  word-break: break-word;
+}
+
+.workspace-file-item {
+  width: 100%;
+  border: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.workspace-file-item:hover {
+  border-color: var(--accent-color);
+  background: rgba(47, 129, 247, 0.08);
+}
+
+.workspace-file-icon {
+  flex-shrink: 0;
+  font-size: 16px;
+}
+
+.workspace-file-info {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.workspace-file-name {
+  font-size: 12px;
+  font-family: 'Monaco', 'Consolas', monospace;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.workspace-file-path {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: 'Monaco', 'Consolas', monospace;
+  word-break: break-all;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .modal-content.git-diff-modal-content {
@@ -2587,7 +2713,8 @@ body {
   }
 
   .tool-calls-panel,
-  .git-changes-panel {
+  .git-changes-panel,
+  .workspace-files-panel {
     width: 300px;
     max-width: 44vw;
   }
@@ -2630,7 +2757,8 @@ body {
   }
 
   .tool-calls-panel,
-  .git-changes-panel {
+  .git-changes-panel,
+  .workspace-files-panel {
     position: absolute;
     right: 0;
     top: 0;
@@ -2681,7 +2809,8 @@ body {
 
   /* 禁用面板过渡 */
   .tool-calls-panel,
-  .git-changes-panel {
+  .git-changes-panel,
+  .workspace-files-panel {
     transition: none;
   }
 

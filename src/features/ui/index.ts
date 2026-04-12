@@ -8,7 +8,8 @@ import {
 import { formatTime, formatDateSeparator } from '../../lib/utils';
 import { escapeHtml } from '../../lib/html';
 import { formatMessageContent } from '../../lib/markdown';
-import type { ToolCall, GitFileChange, GitStatus } from '../../types';
+import { buildToolPanelActivitySummary } from '../agents/activity';
+import type { ToolCall, GitFileChange, GitStatus, FileItem } from '../../types';
 import { state } from '../../store';
 import { TIMEOUTS } from '../../config';
 import {
@@ -25,6 +26,10 @@ import {
   gitDiffModalEl,
   gitDiffPathEl,
   gitDiffContentEl,
+  workspaceFilesPanelEl,
+  workspaceFilesListEl,
+  workspaceFilesRefreshTimeEl,
+  refreshWorkspaceFilesBtnEl,
 } from '../../dom';
 import { persistCurrentSessionMessages } from '../storage';
 import { showError, isCurrentAgentBusy } from '../agents';
@@ -631,6 +636,26 @@ export function onGitChangesClick(event: MouseEvent) {
   void openGitDiffPreview(path);
 }
 
+export function onWorkspaceFilesClick(event: MouseEvent) {
+  const target = event.target as HTMLElement;
+  const fileItem = target.closest('button[data-workspace-file-path]') as HTMLButtonElement | null;
+  const encodedPath = fileItem?.dataset.workspaceFilePath;
+  if (!encodedPath) {
+    return;
+  }
+
+  const path = decodeArtifactPath(encodedPath);
+  if (!path) {
+    return;
+  }
+
+  event.preventDefault();
+  // Import and call insertFilePathAtCursor
+  void import('../agents/workspace').then(({ insertFilePathAtCursor }) => {
+    insertFilePathAtCursor(path);
+  });
+}
+
 // ── Tool calls display ────────────────────────────────────────────────────────
 
 const GIT_STATUS_LABEL_MAP: Readonly<Record<GitStatus, string>> = {
@@ -720,24 +745,94 @@ export function showGitChanges(
     .join('');
 }
 
+// 显示工作目录文件
+export function showWorkspaceFiles(
+  files: FileItem[],
+  options?: {
+    loading?: boolean;
+    error?: string;
+    lastRefreshedAt?: number;
+    disableRefresh?: boolean;
+    forceOpen?: boolean;
+  }
+) {
+  const loading = Boolean(options?.loading);
+  const error = options?.error?.trim() || '';
+  const disableRefresh = Boolean(options?.disableRefresh);
+  const forceOpen = Boolean(options?.forceOpen);
+  if (!forceOpen && workspaceFilesPanelEl.classList.contains('hidden')) {
+    return;
+  }
+
+  refreshWorkspaceFilesBtnEl.disabled = loading || disableRefresh;
+  workspaceFilesRefreshTimeEl.textContent = formatWorkspaceFilesRefreshTime(options?.lastRefreshedAt);
+  workspaceFilesPanelEl.classList.remove('hidden');
+
+  if (loading) {
+    workspaceFilesListEl.innerHTML = '<div class="workspace-files-state">正在读取文件列表...</div>';
+    return;
+  }
+
+  if (error) {
+    workspaceFilesListEl.innerHTML = `<div class="workspace-files-state">${escapeHtml(error)}</div>`;
+    return;
+  }
+
+  if (files.length === 0) {
+    workspaceFilesListEl.innerHTML = '<div class="workspace-files-state">工作目录是空的。</div>';
+    return;
+  }
+
+  workspaceFilesListEl.innerHTML = files
+    .map((file) => {
+      const icon = file.is_dir ? '📁' : '📄';
+      const encodedPath = encodeURIComponent(file.path);
+
+      return `
+        <button type="button" class="workspace-file-item" data-workspace-file-path="${encodedPath}" title="点击插入 @${escapeHtml(file.name)}">
+          <span class="workspace-file-icon">${icon}</span>
+          <div class="workspace-file-info">
+            <span class="workspace-file-name">${escapeHtml(file.name)}</span>
+            <span class="workspace-file-path">${escapeHtml(file.path)}</span>
+          </div>
+        </button>
+      `;
+    })
+    .join('');
+}
+
+function formatWorkspaceFilesRefreshTime(lastRefreshedAt?: number): string {
+  if (!lastRefreshedAt) {
+    return '未刷新';
+  }
+  return `更新于 ${formatTime(new Date(lastRefreshedAt))}`;
+}
+
 // 显示工具调用
 export function showToolCalls(toolCalls: ToolCall[], options?: { forceOpen?: boolean }) {
   const forceOpen = Boolean(options?.forceOpen);
+  const currentAgentId = state.currentAgentId;
+  const activity = currentAgentId ? state.activityByAgent[currentAgentId] : undefined;
+  const summary = buildToolPanelActivitySummary(activity, Date.now(), 120_000, isCurrentAgentBusy());
+  const summaryClass = summary.includes('疑似卡住') ? 'tool-calls-summary is-stalled' : 'tool-calls-summary';
+  const summaryHtml = `<div class="${summaryClass}">${escapeHtml(summary)}</div>`;
   if (toolCalls.length === 0) {
     if (!forceOpen) {
       toolCallsPanelEl.classList.add('hidden');
       toolCallsListEl.innerHTML = '';
       return;
     }
-    toolCallsListEl.innerHTML = '<div class="tool-calls-state">当前会话暂无工具调用记录。</div>';
+    toolCallsListEl.innerHTML = `${summaryHtml}<div class="tool-calls-state">当前会话暂无工具调用记录。</div>`;
     toolCallsPanelEl.classList.remove('hidden');
     return;
   }
 
-  toolCallsListEl.innerHTML = [...toolCalls]
-    .reverse()
-    .map(
-      (tc) => `
+  toolCallsListEl.innerHTML =
+    summaryHtml +
+    [...toolCalls]
+      .reverse()
+      .map(
+        (tc) => `
     <div class="tool-call-item">
       <div class="tool-name">${escapeHtml(tc.name)}</div>
       <div class="tool-status">状态: ${tc.status}</div>
@@ -750,8 +845,8 @@ export function showToolCalls(toolCalls: ToolCall[], options?: { forceOpen?: boo
       ${tc.output ? renderArtifactPreviewActions(tc.output) : ''}
     </div>
   `
-    )
-    .join('');
+      )
+      .join('');
 
   toolCallsPanelEl.classList.remove('hidden');
 }
@@ -770,7 +865,7 @@ export function renderMessages() {
   }
   const quickActionEnabled = canUseConversationQuickAction();
   const thinkingIndicator = isCurrentAgentBusy()
-    ? `<div class="thinking-indicator" aria-live="polite" aria-label="iFlow 正在思考">🤔</div>`
+    ? `<div class="thinking-indicator" aria-live="polite" aria-label="Qwen 正在思考">🤔</div>`
     : '';
 
   if (state.messages.length === 0) {
@@ -856,7 +951,7 @@ export function renderMessages() {
                   data-retry-message-id="${escapeHtml(retryTargetMessageId)}"
                   ${quickActionEnabled ? '' : 'disabled'}
                 >
-                  重试上一问
+                  重试
                 </button>
               `
                 : ''

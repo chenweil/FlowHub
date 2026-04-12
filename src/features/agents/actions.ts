@@ -1,5 +1,5 @@
 // src/features/agents/actions.ts — Agent CRUD operations
-import { connectIflow, disconnectAgent } from '../../services/tauri';
+import { connectQwen, disconnectAgent } from '../../services/tauri';
 import { shortAgentId, getWorkspaceName } from '../../lib/utils';
 import { escapeHtml } from '../../lib/html';
 import { showConfirmDialog } from '../../dom';
@@ -24,16 +24,17 @@ import {
 import { normalizeConnectionErrorMessage, markLastConnectedAgent, removeLastConnectedAgentIfMatches, showLoading, hideLoading, showSuccess, showError } from './utils';
 import { updateAgentStatusUI, updateConnectionStatus, updateCurrentAgentModelUI, updateCurrentAgentThinkUI, closeCurrentAgentModelMenu } from './ui';
 import { refreshAgentGitChanges, resetGitChangesForAgent } from './git';
+import { resetWorkspaceFilesForAgent } from './workspace';
 import { loadAgentModelOptions } from './model';
 
 // ── Add Agent ─────────────────────────────────────────────────────────────────
 
-export async function addAgent(name: string, iflowPath: string, workspacePath: string) {
+export async function addAgent(name: string, qwenPath: string, workspacePath: string) {
   try {
-    showLoading('正在连接 iFlow...');
+    showLoading('正在连接 Qwen...');
 
-    const agentId = `iflow-${Date.now()}`;
-    const result = await connectIflow(agentId, iflowPath, workspacePath, null);
+    const agentId = `qwen-${Date.now()}`;
+    const result = await connectQwen(agentId, qwenPath, workspacePath, null);
 
     if (!result.success) {
       showError(result.error || '连接失败');
@@ -43,12 +44,11 @@ export async function addAgent(name: string, iflowPath: string, workspacePath: s
     const agent: Agent = {
       id: agentId,
       name,
-      type: 'iflow',
+      type: 'qwen',
       status: 'connected',
       workspacePath,
-      iflowPath,
+      qwenPath,
       thinkEnabled: false,
-      port: result.port,
     };
 
     state.agents.push(agent);
@@ -61,7 +61,7 @@ export async function addAgent(name: string, iflowPath: string, workspacePath: s
 
     renderAgentList();
     selectAgent(agentId);
-    showSuccess('iFlow 连接成功！');
+    showSuccess('Qwen 连接成功！');
   } catch (error) {
     console.error('Connection error:', error);
     showError(`连接错误: ${normalizeConnectionErrorMessage(error)}`);
@@ -132,8 +132,8 @@ export function selectAgent(agentId: string) {
   void refreshAgentGitChanges(agent.id);
 
   if (isConnected) {
-    void import('../sessions').then(({ syncIflowHistorySessions }) => {
-      syncIflowHistorySessions(agent);
+    void import('../sessions').then(({ syncQwenHistorySessions }) => {
+      syncQwenHistorySessions(agent);
     });
     void loadAgentModelOptions(agent).then(() => {
       if (state.currentAgentId === agent.id) {
@@ -177,14 +177,17 @@ export async function deleteAgent(agentId: string) {
   delete state.inflightSessionByAgent[agentId];
   delete state.registryByAgent[agentId];
   delete state.toolCallsByAgent[agentId];
+  delete state.activityByAgent[agentId];
   delete state.modelOptionsCacheByAgent[agentId];
 
   resetGitChangesForAgent(agentId);
+  resetWorkspaceFilesForAgent(agentId);
 
   const removedSessions = state.sessionsByAgent[agentId] || [];
   delete state.sessionsByAgent[agentId];
   for (const session of removedSessions) {
     delete state.messagesBySession[session.id];
+    delete state.contextUsageBySession[session.id];
   }
 
   if (deletingCurrentAgent) {
@@ -279,25 +282,6 @@ export async function submitRenameAgent() {
 
 // ── Agent List UI ─────────────────────────────────────────────────────────────
 
-function handleAgentAction(action: string, agentId: string) {
-  if (!agentId) {
-    return;
-  }
-  if (action === 'delete') {
-    void deleteAgent(agentId);
-    return;
-  }
-  if (action === 'rename') {
-    void renameAgent(agentId);
-    return;
-  }
-  if (action === 'reconnect') {
-    void import('./reconnect').then(({ reconnectAgent }) => {
-      reconnectAgent(agentId);
-    });
-  }
-}
-
 let lastAgentClickId = '';
 let lastAgentClickTime = 0;
 
@@ -369,7 +353,7 @@ export function renderAgentList() {
     .map(
       (agent) => `
     <div class="agent-item ${agent.id === state.currentAgentId ? 'active' : ''}" data-agent-id="${agent.id}">
-      <div class="agent-icon">iF</div>
+      <div class="agent-icon">QW</div>
       <div class="agent-info">
         <div class="agent-name">${escapeHtml(agent.name)}</div>
         <div class="agent-status" title="${escapeHtml(agent.workspacePath)}">${escapeHtml(getWorkspaceName(agent.workspacePath))}</div>
@@ -389,18 +373,6 @@ export function renderAgentList() {
   `
     )
     .join('');
-
-  // 显式绑定按钮事件
-  const actionButtons = agentListEl.querySelectorAll('button[data-action][data-agent-id]');
-  actionButtons.forEach((button) => {
-    button.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      const action = button.getAttribute('data-action') || '';
-      const agentId = button.getAttribute('data-agent-id') || '';
-      handleAgentAction(action, agentId);
-    });
-  });
 }
 
 // ── Persistence ───────────────────────────────────────────────────────────────
@@ -425,10 +397,13 @@ export async function loadAgents() {
     state.agents = JSON.parse(saved) as Agent[];
     state.agents = state.agents.map((agent) => ({
       ...agent,
-      iflowPath: agent.iflowPath || 'iflow',
+      type: agent.type === 'iflow' ? 'qwen' : (agent.type || 'qwen'),
+      qwenPath:
+        (agent as Agent & { iflowPath?: string }).qwenPath ||
+        (agent as Agent & { iflowPath?: string }).iflowPath ||
+        'qwen',
       thinkEnabled: Boolean(agent.thinkEnabled),
       status: 'disconnected' as const,
-      port: undefined,
     }));
 
     pruneSessionDataByAgents();

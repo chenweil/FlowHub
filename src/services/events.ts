@@ -1,5 +1,5 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import type { StreamMessageType, ToolCall } from '../types';
+import type { ReportedContextUsage, StreamMessageType, ToolCall } from '../types';
 
 // Payload interfaces
 
@@ -39,6 +39,11 @@ export interface TaskFinishPayload {
 export interface AgentErrorPayload {
   agentId?: string;
   error?: string;
+}
+
+export interface ContextUsagePayload extends ReportedContextUsage {
+  agentId?: string;
+  sessionId?: string;
 }
 
 // Typed wrapper functions
@@ -81,4 +86,10 @@ export function onAgentError(
   callback: (payload: AgentErrorPayload) => void
 ): Promise<UnlistenFn> {
   return listen<AgentErrorPayload>('agent-error', (event) => callback(event.payload));
+}
+
+export function onContextUsage(
+  callback: (payload: ContextUsagePayload) => void
+): Promise<UnlistenFn> {
+  return listen<ContextUsagePayload>('context-usage', (event) => callback(event.payload));
 }

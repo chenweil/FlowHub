@@ -31,6 +31,7 @@ export const currentAgentModelMenuEl = document.getElementById('current-agent-mo
 export const toggleThinkBtnEl = document.getElementById('toggle-think-btn') as HTMLButtonElement;
 export const openToolCallsBtnEl = document.getElementById('open-tool-calls-btn') as HTMLButtonElement;
 export const openGitChangesBtnEl = document.getElementById('open-git-changes-btn') as HTMLButtonElement;
+export const openWorkspaceFilesBtnEl = document.getElementById('open-workspace-files-btn') as HTMLButtonElement;
 export const openCapabilityCenterBtnEl = document.getElementById(
   'open-capability-center-btn'
 ) as HTMLButtonElement;
@@ -42,6 +43,11 @@ export const gitChangesListEl = document.getElementById('git-changes-list') as H
 export const gitChangesRefreshTimeEl = document.getElementById('git-changes-refresh-time') as HTMLSpanElement;
 export const refreshGitChangesBtnEl = document.getElementById('refresh-git-changes') as HTMLButtonElement;
 export const closeGitChangesPanelBtnEl = document.getElementById('close-git-panel') as HTMLButtonElement;
+export const workspaceFilesPanelEl = document.getElementById('workspace-files-panel') as HTMLDivElement;
+export const workspaceFilesListEl = document.getElementById('workspace-files-list') as HTMLDivElement;
+export const workspaceFilesRefreshTimeEl = document.getElementById('workspace-files-refresh-time') as HTMLSpanElement;
+export const refreshWorkspaceFilesBtnEl = document.getElementById('refresh-workspace-files') as HTMLButtonElement;
+export const closeWorkspaceFilesPanelBtnEl = document.getElementById('close-workspace-files-panel') as HTMLButtonElement;
 export const newSessionBtnEl = document.getElementById('new-session-btn') as HTMLButtonElement;
 export const clearChatBtnEl = document.getElementById('clear-chat-btn') as HTMLButtonElement;
 export const toolbarMoreBtnEl = document.getElementById('toolbar-more-btn') as HTMLButtonElement;

@@ -13,6 +13,7 @@ describe('getContextWindow', () => {
   it('exact matches CLI models (case-insensitive)', () => {
     expect(getContextWindow('GLM-4.7')).toBe(200_000);
     expect(getContextWindow('glm-5')).toBe(200_000);
+    expect(getContextWindow('coder-model')).toBe(1_000_000);
     expect(getContextWindow('iflow-rome-30ba3b')).toBe(256_000);
     expect(getContextWindow('deepseek-v3.2')).toBe(128_000);
     expect(getContextWindow('Qwen3-Coder-Plus')).toBe(1_000_000);

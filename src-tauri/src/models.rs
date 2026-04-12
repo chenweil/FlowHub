@@ -10,7 +10,6 @@ pub struct AgentInfo {
     pub agent_type: String,
     pub status: AgentStatus,
     pub workspace_path: String,
-    pub port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,14 +71,7 @@ pub(crate) type MessageSender = UnboundedSender<ListenerCommand>;
 #[derive(Serialize)]
 pub struct ConnectResponse {
     pub success: bool,
-    pub port: u16,
     pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ModelOption {
-    pub label: String,
-    pub value: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -92,4 +84,37 @@ pub struct SkillRuntimeItem {
     pub path: String,
     pub source: String,
     pub discovered_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileItem {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+    pub size: u64,
+    pub modified_at: Option<i64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ConnectResponse;
+    use serde_json::json;
+
+    #[test]
+    fn connect_response_serializes_without_port() {
+        let payload = serde_json::to_value(ConnectResponse {
+            success: true,
+            error: None,
+        })
+        .expect("serialize connect response");
+
+        assert_eq!(
+            payload,
+            json!({
+                "success": true,
+                "error": null
+            })
+        );
+    }
 }

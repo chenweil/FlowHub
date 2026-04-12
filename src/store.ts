@@ -12,6 +12,9 @@ import type {
   GitFileChange,
   SendKeyMode,
   SkillRuntimeItem,
+  FileItem,
+  ReportedContextUsage,
+  AgentActivity,
 } from './types';
 import {
   isMcpSuggestionEnabled as isMcpSuggestionEnabledInMap,
@@ -62,6 +65,9 @@ export const state = {
   // ── 关联数据 ──────────────────────────────────────────────────────────────
   sessionsByAgent: {} as Record<string, Session[]>,
   messagesBySession: {} as Record<string, Message[]>,
+  contextUsageBySession: {} as Record<string, ReportedContextUsage>,
+  activityByAgent: {} as Record<string, AgentActivity>,
+  pendingAcpSessionIdByAgent: {} as Record<string, string>,
   draftsBySession: {} as Record<string, string>,
   scrollPositionsBySession: {} as Record<string, number>,
   inflightSessionByAgent: {} as Record<string, string>,
@@ -84,6 +90,12 @@ export const state = {
   gitChangesLoadingByAgent: {} as Record<string, boolean>,
   gitChangesErrorByAgent: {} as Record<string, string>,
   gitChangesLastRefreshedAtByAgent: {} as Record<string, number>,
+
+  // workspace files
+  workspaceFilesByAgent: {} as Record<string, FileItem[]>,
+  workspaceFilesLoadingByAgent: {} as Record<string, boolean>,
+  workspaceFilesErrorByAgent: {} as Record<string, string>,
+  workspaceFilesLastRefreshedAtByAgent: {} as Record<string, number>,
 
   // ── UI 交互状态 ────────────────────────────────────────────────────────────
   modelSelectorOpen: false,

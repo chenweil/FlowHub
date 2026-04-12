@@ -1,8 +1,6 @@
 // src/features/agents/tool-calls.ts — tool call management
 import type { ToolCall } from '../../types';
 import { state } from '../../store';
-import { toolCallsListEl, toolCallsPanelEl } from '../../dom';
-import { escapeHtml } from '../../lib/html';
 
 // ── Tool call normalizers ─────────────────────────────────────────────────────
 
@@ -42,43 +40,25 @@ export function mergeToolCalls(agentId: string, incoming: ToolCall[]): void {
   state.toolCallsByAgent[agentId] = merged;
 
   if (state.currentAgentId === agentId) {
-    renderToolCallsForAgent(agentId);
+    void renderToolCallsForAgent(agentId);
   }
 }
 
 export function resetToolCallsForAgent(agentId: string): void {
   state.toolCallsByAgent[agentId] = [];
   if (state.currentAgentId === agentId) {
-    renderToolCallsForAgent(agentId);
+    void renderToolCallsForAgent(agentId);
   }
 }
 
 export function openCurrentAgentToolCallsPanel(): void {
-  renderToolCallsForAgent(state.currentAgentId || '');
-  toolCallsPanelEl.classList.remove('hidden');
+  void renderToolCallsForAgent(state.currentAgentId || '', true);
 }
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
-function renderToolCallsForAgent(agentId: string): void {
+async function renderToolCallsForAgent(agentId: string, forceOpen = false): Promise<void> {
   const calls = state.toolCallsByAgent[agentId] || [];
-  if (calls.length === 0) {
-    toolCallsListEl.innerHTML = '<div class="tool-calls-empty">暂无工具调用</div>';
-    return;
-  }
-
-  toolCallsListEl.innerHTML = calls
-    .map(
-      (call) => `
-        <div class="tool-call-item tool-call-${call.status}">
-          <div class="tool-call-header">
-            <span class="tool-call-name">${escapeHtml(call.name)}</span>
-            <span class="tool-call-status">${escapeHtml(call.status)}</span>
-          </div>
-          ${call.arguments ? `<div class="tool-call-input"><pre>${escapeHtml(JSON.stringify(call.arguments, null, 2))}</pre></div>` : ''}
-          ${call.output ? `<div class="tool-call-output"><pre>${escapeHtml(String(call.output))}</pre></div>` : ''}
-        </div>
-      `
-    )
-    .join('');
+  const { showToolCalls } = await import('../ui');
+  showToolCalls(calls, { forceOpen });
 }

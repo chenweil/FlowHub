@@ -79,7 +79,7 @@ export function currentAgentModelLabel(agent: Agent): string {
   if (cached && cached.length > 0) {
     return `${resolveModelDisplayName(cached[0])}（默认）`;
   }
-  return 'iFlow 默认模型';
+  return 'Qwen 默认模型';
 }
 
 export function updateCurrentAgentThinkUI() {
@@ -154,5 +154,4 @@ export function renderCurrentAgentModelMenu(agent: Agent, options: ModelOption[]
     })
     .join('');
 }
-
 

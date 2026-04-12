@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use futures::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tauri::Emitter;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
+use tokio::process::{ChildStdin, ChildStdout};
 use tokio::time::{timeout, Duration};
-use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 use crate::models::ListenerCommand;
 use crate::router::{emit_task_finish, handle_session_update};
@@ -13,44 +13,36 @@ use super::session_params::{
     build_session_new_params_with_id, build_session_load_params, build_prompt_params,
 };
 
-// ACP 连接
-struct AcpConnection {
-    ws_stream: tokio_tungstenite::WebSocketStream<
-        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-    >,
+struct StdioAcpConnection {
+    writer: ChildStdin,
+    reader: Lines<BufReader<ChildStdout>>,
 }
 
-impl AcpConnection {
-    async fn connect(url: &str) -> Result<Self, String> {
-        let url = url::Url::parse(url).map_err(|e| format!("Invalid URL: {}", e))?;
-
-        let (ws_stream, _) = tokio_tungstenite::connect_async(url)
-            .await
-            .map_err(|e| format!("WebSocket connection failed: {}", e))?;
-
-        Ok(Self { ws_stream })
+impl StdioAcpConnection {
+    fn new(stdout: ChildStdout, stdin: ChildStdin) -> Self {
+        Self {
+            writer: stdin,
+            reader: BufReader::new(stdout).lines(),
+        }
     }
 
     async fn send_message(&mut self, message: String) -> Result<(), String> {
-        self.ws_stream
-            .send(WsMessage::Text(message.into()))
+        self.writer
+            .write_all(format!("{}\n", message).as_bytes())
             .await
-            .map_err(|e| format!("Failed to send message: {}", e))
+            .map_err(|e| format!("Failed to send message: {}", e))?;
+        self.writer
+            .flush()
+            .await
+            .map_err(|e| format!("Failed to flush message: {}", e))
     }
 
     async fn receive_message(&mut self) -> Result<Option<String>, String> {
-        match timeout(Duration::from_secs(30), self.ws_stream.next()).await {
-            Ok(Some(Ok(WsMessage::Text(text)))) => Ok(Some(text.to_string())),
-            Ok(Some(Ok(WsMessage::Binary(bin)))) => String::from_utf8(bin.to_vec())
-                .map(Some)
-                .map_err(|e| format!("Invalid UTF-8: {}", e)),
-            Ok(Some(Ok(WsMessage::Ping(_)))) => Ok(Some(String::new())),
-            Ok(Some(Ok(WsMessage::Pong(_)))) => Ok(Some(String::new())),
-            Ok(Some(Ok(WsMessage::Close(_)))) => Ok(None),
-            Ok(Some(Err(e))) => Err(format!("WebSocket error: {}", e)),
-            Ok(None) => Ok(None),
+        match timeout(Duration::from_secs(30), self.reader.next_line()).await {
+            Ok(Ok(Some(line))) => Ok(Some(line)),
+            Ok(Ok(None)) => Ok(None),
+            Ok(Err(e)) => Err(format!("Stdio read error: {}", e)),
             Err(_) => Ok(Some(String::new())),
-            _ => Ok(None),
         }
     }
 }
@@ -65,7 +57,11 @@ fn build_rpc_request(id: i64, method: &str, params: Value) -> String {
     .to_string()
 }
 
-async fn send_rpc_result(conn: &mut AcpConnection, id: i64, result: Value) -> Result<(), String> {
+async fn send_rpc_result(
+    conn: &mut StdioAcpConnection,
+    id: i64,
+    result: Value,
+) -> Result<(), String> {
     conn.send_message(
         json!({
             "jsonrpc": "2.0",
@@ -78,7 +74,7 @@ async fn send_rpc_result(conn: &mut AcpConnection, id: i64, result: Value) -> Re
 }
 
 async fn send_rpc_error(
-    conn: &mut AcpConnection,
+    conn: &mut StdioAcpConnection,
     id: i64,
     code: i64,
     message: &str,
@@ -111,8 +107,117 @@ fn parse_rpc_id(message: &Value) -> Option<i64> {
     None
 }
 
+fn should_handle_server_method(method: &str) -> bool {
+    matches!(
+        method,
+        "session/request_permission" | "fs/read_text_file" | "fs/write_text_file"
+    )
+}
+
+pub(crate) fn parse_ndjson_line(line: &str) -> Result<Option<Value>, String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_str(trimmed)
+        .map(Some)
+        .map_err(|e| format!("Invalid ACP NDJSON line: {}", e))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ReportedContextUsage {
+    used_tokens: u64,
+    context_window: u64,
+    percentage: f64,
+}
+
+fn value_as_u64(value: &Value) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_i64().and_then(|item| u64::try_from(item).ok()))
+        .or_else(|| {
+            value.as_f64().and_then(|item| {
+                if item.is_finite() && item >= 0.0 {
+                    Some(item as u64)
+                } else {
+                    None
+                }
+            })
+        })
+}
+
+fn reported_context_usage_from_node(payload: &Value) -> Option<ReportedContextUsage> {
+    let usage = payload.get("usageMetadata")?;
+    let context_window = payload.get("contextWindowSize").and_then(value_as_u64)?;
+    let used_tokens = usage
+        .get("promptTokenCount")
+        .and_then(value_as_u64)
+        .or_else(|| usage.get("totalTokenCount").and_then(value_as_u64))?;
+    let percentage = if context_window == 0 {
+        0.0
+    } else {
+        (used_tokens as f64 / context_window as f64) * 100.0
+    };
+
+    Some(ReportedContextUsage {
+        used_tokens,
+        context_window,
+        percentage,
+    })
+}
+
+fn extract_reported_context_usage(payload: &Value) -> Option<ReportedContextUsage> {
+    if let Some(usage) = reported_context_usage_from_node(payload) {
+        return Some(usage);
+    }
+
+    let nested_keys = ["update", "result", "content", "value", "message"];
+    for key in nested_keys {
+        if let Some(child) = payload.get(key) {
+            if let Some(usage) = extract_reported_context_usage(child) {
+                return Some(usage);
+            }
+        }
+    }
+
+    for key in ["candidates", "parts"] {
+        if let Some(items) = payload.get(key).and_then(Value::as_array) {
+            for item in items {
+                if let Some(usage) = extract_reported_context_usage(item) {
+                    return Some(usage);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn emit_reported_context_usage(
+    app_handle: &tauri::AppHandle,
+    agent_id: &str,
+    session_id: Option<&str>,
+    payload: &Value,
+) {
+    let Some(usage) = extract_reported_context_usage(payload) else {
+        return;
+    };
+
+    let _ = app_handle.emit(
+        "context-usage",
+        json!({
+            "agentId": agent_id,
+            "sessionId": session_id,
+            "usedTokens": usage.used_tokens,
+            "contextWindow": usage.context_window,
+            "percentage": usage.percentage,
+            "source": "reported",
+        }),
+    );
+}
+
 async fn handle_server_request(
-    conn: &mut AcpConnection,
+    conn: &mut StdioAcpConnection,
     request_id: i64,
     method: &str,
     params: Option<&Value>,
@@ -194,10 +299,6 @@ async fn handle_server_request(
                 }
             }
         }
-        "_iflow/user/questions" => {
-            send_rpc_result(conn, request_id, json!({ "answers": {} })).await
-        }
-        "_iflow/plan/exit" => send_rpc_result(conn, request_id, json!({ "approved": true })).await,
         _ => send_rpc_error(conn, request_id, -32601, "Method not found").await,
     };
 
@@ -409,80 +510,50 @@ fn emit_model_registry_payload(app_handle: &tauri::AppHandle, agent_id: &str, pa
     );
 }
 
-// 查找可用端口
-pub async fn find_available_port() -> Result<u16, String> {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .map_err(|e| format!("Failed to bind: {}", e))?;
-    let addr = listener
-        .local_addr()
-        .map_err(|e| format!("Failed to get local address: {}", e))?;
-    let port = addr.port();
-    drop(listener);
-    Ok(port)
-}
-
-// 后台消息监听任务
 pub async fn message_listener_task(
     app_handle: tauri::AppHandle,
     agent_id: String,
-    ws_url: String,
     workspace_path: String,
+    stdout: ChildStdout,
+    stdin: ChildStdin,
     mut message_rx: tokio::sync::mpsc::UnboundedReceiver<ListenerCommand>,
 ) {
     println!("[listener] Starting for agent: {}", agent_id);
 
-    let mut retry_count = 0;
-    let max_retries = 5;
-    let mut cached_session_id: Option<String> = None;
-
     // 未 ready 前收到的 prompt 先入队。每条可绑定一个目标 sessionId（用于恢复指定会话后再发送）。
     let mut queued_prompts: VecDeque<(String, Option<String>)> = VecDeque::new();
+    let mut conn = StdioAcpConnection::new(stdout, stdin);
+    let mut rpc_id_counter: i64 = 1;
+    let mut initialize_request_id: Option<i64>;
+    let mut session_new_request_id: Option<i64> = None;
+    let mut session_new_target_id: Option<String> = None;
+    let mut session_load_request_id: Option<i64> = None;
+    let mut session_load_target_id: Option<String> = None;
+    let mut session_load_for_initialize = false;
+    let mut session_id: Option<String> = None;
+    let mut pending_prompt_request_ids: HashSet<i64> = HashSet::new();
+    let mut pending_set_model_requests: HashMap<
+        i64,
+        (tokio::sync::oneshot::Sender<Result<String, String>>, String),
+    > = HashMap::new();
+    let mut pending_set_think_requests: HashMap<
+        i64,
+        (
+            tokio::sync::oneshot::Sender<Result<bool, String>>,
+            bool,
+            String,
+        ),
+    > = HashMap::new();
 
-    while retry_count < max_retries {
-        println!(
-            "[listener] Connection attempt {}/{}",
-            retry_count + 1,
-            max_retries
-        );
+    let init_id = next_rpc_id(&mut rpc_id_counter);
+    let init_request = build_rpc_request(init_id, "initialize", build_initialize_params());
+    if let Err(e) = conn.send_message(init_request).await {
+        println!("[listener] Failed to send initialize: {}", e);
+        return;
+    }
+    initialize_request_id = Some(init_id);
 
-        match AcpConnection::connect(&ws_url).await {
-            Ok(mut conn) => {
-                println!("[listener] WebSocket connected!");
-                retry_count = 0;
-
-                let mut rpc_id_counter: i64 = 1;
-                let mut initialize_request_id: Option<i64>;
-                let mut session_new_request_id: Option<i64> = None;
-                let mut session_new_target_id: Option<String> = None;
-                let mut session_load_request_id: Option<i64> = None;
-                let mut session_load_target_id: Option<String> = None;
-                let mut session_load_for_initialize = false;
-                let mut session_id: Option<String> = cached_session_id.clone();
-                let mut pending_prompt_request_ids: HashSet<i64> = HashSet::new();
-                let mut pending_set_model_requests: HashMap<
-                    i64,
-                    (tokio::sync::oneshot::Sender<Result<String, String>>, String),
-                > = HashMap::new();
-                let mut pending_set_think_requests: HashMap<
-                    i64,
-                    (
-                        tokio::sync::oneshot::Sender<Result<bool, String>>,
-                        bool,
-                        String,
-                    ),
-                > = HashMap::new();
-
-                let init_id = next_rpc_id(&mut rpc_id_counter);
-                let init_request =
-                    build_rpc_request(init_id, "initialize", build_initialize_params());
-                if let Err(e) = conn.send_message(init_request).await {
-                    println!("[listener] Failed to send initialize: {}", e);
-                    break;
-                }
-                initialize_request_id = Some(init_id);
-
-                loop {
+    loop {
                     tokio::select! {
                         msg = message_rx.recv() => {
                             match msg {
@@ -630,8 +701,13 @@ pub async fn message_listener_task(
                                             continue;
                                         }
 
-                                        let Ok(message_json) = serde_json::from_str::<Value>(raw) else {
-                                            println!("[listener] JSON parse failed: {}", raw);
+                                        let Some(message_json) = (match parse_ndjson_line(raw) {
+                                            Ok(message) => message,
+                                            Err(error) => {
+                                                println!("[listener] JSON parse failed: {} ({})", raw, error);
+                                                continue;
+                                            }
+                                        }) else {
                                             continue;
                                         };
 
@@ -643,11 +719,21 @@ pub async fn message_listener_task(
                                                 if let Some(update) = params.and_then(|p| p.get("update")) {
                                                     handle_session_update(&app_handle, &agent_id, update).await;
                                                     emit_command_registry_from_update(&app_handle, &agent_id, update);
+                                                    emit_reported_context_usage(
+                                                        &app_handle,
+                                                        &agent_id,
+                                                        session_id.as_deref(),
+                                                        update,
+                                                    );
                                                 }
                                                 continue;
                                             }
 
                                             if let Some(request_id) = request_id {
+                                                if !should_handle_server_method(method) {
+                                                    let _ = send_rpc_error(&mut conn, request_id, -32601, "Method not found").await;
+                                                    continue;
+                                                }
                                                 handle_server_request(&mut conn, request_id, method, params).await;
                                             } else {
                                                 println!("[listener] Notification method ignored: {}", method);
@@ -793,7 +879,6 @@ pub async fn message_listener_task(
 
                                             if let Some(target_session_id) = load_target {
                                                 session_id = Some(target_session_id.clone());
-                                                cached_session_id = Some(target_session_id.clone());
                                                 let _ = app_handle.emit(
                                                     "acp-session",
                                                     json!({
@@ -806,10 +891,16 @@ pub async fn message_listener_task(
                                             if let Some(result) = message_json.get("result") {
                                                 emit_command_registry_payload(&app_handle, &agent_id, result);
                                                 emit_model_registry_payload(&app_handle, &agent_id, result);
+                                                emit_reported_context_usage(
+                                                    &app_handle,
+                                                    &agent_id,
+                                                    session_id.as_deref(),
+                                                    result,
+                                                );
                                             }
 
                                             let message_text = if load_was_initialize {
-                                                "✅ iFlow ACP 会话已恢复"
+                                                "✅ Qwen ACP 会话已恢复"
                                             } else {
                                                 "✅ 已切换到目标会话"
                                             };
@@ -909,8 +1000,6 @@ pub async fn message_listener_task(
                                                 .and_then(Value::as_str)
                                                 .map(|s| s.to_string())
                                                 .or(requested_session_id);
-                                            cached_session_id = session_id.clone();
-
                                             if session_id.is_none() {
                                                 let _ = app_handle.emit(
                                                     "agent-error",
@@ -925,6 +1014,12 @@ pub async fn message_listener_task(
                                             if let Some(result) = message_json.get("result") {
                                                 emit_command_registry_payload(&app_handle, &agent_id, result);
                                                 emit_model_registry_payload(&app_handle, &agent_id, result);
+                                                emit_reported_context_usage(
+                                                    &app_handle,
+                                                    &agent_id,
+                                                    session_id.as_deref(),
+                                                    result,
+                                                );
                                             }
 
                                             if let Some(current_session_id) = &session_id {
@@ -1002,6 +1097,15 @@ pub async fn message_listener_task(
                                                     }),
                                                 );
                                                 continue;
+                                            }
+
+                                            if let Some(result) = message_json.get("result") {
+                                                emit_reported_context_usage(
+                                                    &app_handle,
+                                                    &agent_id,
+                                                    session_id.as_deref(),
+                                                    result,
+                                                );
                                             }
 
                                             let reason = message_json
@@ -1082,44 +1186,48 @@ pub async fn message_listener_task(
                                     }
                                 }
                                 Ok(None) => {
-                                    println!("[listener] WebSocket closed by server");
-                                    break;
+                                    println!("[listener] stdio closed by server");
+                                    return;
                                 }
                                 Err(e) => {
                                     println!("[listener] Receive error: {}", e);
-                                    break;
+                                    return;
                                 }
                             }
                         }
                     }
-                }
-            }
-            Err(e) => {
-                retry_count += 1;
-                println!("[listener] Connection failed: {}", e);
-                if retry_count >= max_retries {
-                    let _ = app_handle.emit(
-                        "agent-error",
-                        json!({
-                            "agentId": &agent_id,
-                            "error": format!("Failed after {} attempts: {}", max_retries, e),
-                        }),
-                    );
-                    break;
-                }
-                tokio::time::sleep(Duration::from_secs(2)).await;
-            }
-        }
     }
-
-    println!("[listener] Stopped for agent: {}", agent_id);
 }
 
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use super::{normalized_command_entries, normalized_mcp_entries, text_from_json_value};
+    use super::{
+        extract_reported_context_usage, normalized_command_entries,
+        normalized_mcp_entries, parse_ndjson_line, should_handle_server_method,
+        text_from_json_value,
+    };
+
+    #[test]
+    fn parse_ndjson_line_reads_single_json_message() {
+        let parsed = parse_ndjson_line(r#"{"jsonrpc":"2.0","id":1}"#)
+            .expect("parse line")
+            .expect("message");
+        assert_eq!(parsed, json!({"jsonrpc":"2.0","id":1}));
+    }
+
+    #[test]
+    fn parse_ndjson_line_ignores_blank_lines() {
+        assert!(parse_ndjson_line("   ").expect("blank line").is_none());
+    }
+
+    #[test]
+    fn private_iflow_methods_are_not_supported() {
+        assert!(!should_handle_server_method("_iflow/user/questions"));
+        assert!(!should_handle_server_method("_iflow/plan/exit"));
+        assert!(should_handle_server_method("fs/read_text_file"));
+    }
 
     #[test]
     fn parse_text_from_json_value_array() {
@@ -1180,5 +1288,21 @@ mod tests {
             entries[0].get("description").and_then(|v| v.as_str()),
             Some("Local FS")
         );
+    }
+
+    #[test]
+    fn extract_reported_context_usage_prefers_prompt_tokens() {
+        let payload = json!({
+            "usageMetadata": {
+                "promptTokenCount": 2500,
+                "totalTokenCount": 2800
+            },
+            "contextWindowSize": 100000
+        });
+
+        let usage = extract_reported_context_usage(&payload).expect("reported usage");
+        assert_eq!(usage.used_tokens, 2500);
+        assert_eq!(usage.context_window, 100000);
+        assert!((usage.percentage - 2.5).abs() < f64::EPSILON);
     }
 }

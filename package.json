@@ -1,7 +1,7 @@
 {
   "name": "iflow-workspace",
-  "version": "0.4.0",
-  "description": "Multi-Agent Desktop App for iFlow",
+  "version": "1.0.0",
+  "description": "Flow Hub desktop app powered by Qwen",
   "type": "module",
   "scripts": {
     "dev": "vite",

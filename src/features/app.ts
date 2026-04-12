@@ -7,6 +7,7 @@ import {
   onAcpSession,
   onTaskFinish,
   onAgentError,
+  onContextUsage,
 } from '../services/events';
 import {
   getVersion,
@@ -53,6 +54,7 @@ import {
   toggleThinkBtnEl,
   openToolCallsBtnEl,
   openGitChangesBtnEl,
+  openWorkspaceFilesBtnEl,
   openCapabilityCenterBtnEl,
   toolCallsPanelEl,
   toolCallsListEl,
@@ -60,6 +62,9 @@ import {
   gitChangesListEl,
   refreshGitChangesBtnEl,
   closeGitChangesPanelBtnEl,
+  workspaceFilesListEl,
+  refreshWorkspaceFilesBtnEl,
+  closeWorkspaceFilesPanelBtnEl,
   newSessionBtnEl,
   clearChatBtnEl,
   clearAllSessionsBtnEl,
@@ -146,6 +151,8 @@ import {
   refreshAgentGitChanges,
   refreshCurrentAgentGitChanges,
   showGitChangesForAgent,
+  showWorkspaceFilesForAgent,
+  refreshCurrentAgentWorkspaceFiles,
   showError,
 } from './agents';
 import {
@@ -153,13 +160,16 @@ import {
   scrollToBottom,
   onChatMessagesClick,
   onToolCallsClick,
+  showToolCalls,
   closeArtifactPreviewModal,
   closeGitDiffModal,
   onGitChangesClick,
+  onWorkspaceFilesClick,
 } from './ui';
 import { canCompressContext } from '../lib/contextCompression';
 import { clearMessageWatchdog, resetMessageWatchdog } from './messageWatchdog';
 import { buildHistoryContinuationPrompt } from './historyContinuation';
+import { buildBusyActivityHint, recordAgentActivity } from './agents/activity';
 
 const SEND_BUTTON_SEND_ICON = `
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -199,6 +209,7 @@ const NOTIFICATION_SOUND_DEFAULT = 'short-01.mp3';
 const NOTIFICATION_DEFAULT_DELAY_MS = 5000;
 const NOTIFICATION_MAX_DELAY_MS = 59 * 60 * 1000 + 59 * 1000;
 const NOTIFICATION_MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+const AGENT_ACTIVITY_IDLE_THRESHOLD_MS = 120_000;
 
 interface NotificationSoundOption {
   id: string;
@@ -317,7 +328,7 @@ async function refreshSkillsForCurrentAgentType(force = false) {
   if (!agentType) {
     return;
   }
-  if (agentType !== 'iflow') {
+  if (agentType !== 'qwen') {
     return;
   }
   const hasCachedSkills = (state.skillRuntimeByAgentType[agentType] || []).length > 0;
@@ -447,12 +458,12 @@ function renderCapabilityCenterSkillPanel() {
   });
 
   if (viewModel.state === 'unsupported') {
-    capabilitySkillNoteEl.textContent = '当前仅支持 iflow 类型 Agent 的技能扫描。';
+    capabilitySkillNoteEl.textContent = '当前仅支持 qwen 类型 Agent 的技能扫描。';
     capabilitySkillListEl.innerHTML = '<div class="capability-empty">当前 Agent 类型暂不支持 Skill 管理。</div>';
     return;
   }
   if (viewModel.state === 'loading') {
-    capabilitySkillNoteEl.textContent = '正在扫描 ~/.iflow/skills ...';
+    capabilitySkillNoteEl.textContent = '正在扫描 ~/.qwen/skills ...';
     capabilitySkillListEl.innerHTML = '<div class="capability-empty">加载中...</div>';
     return;
   }
@@ -462,12 +473,12 @@ function renderCapabilityCenterSkillPanel() {
     return;
   }
   if (viewModel.state === 'empty') {
-    capabilitySkillNoteEl.textContent = '未发现 Skill，目录：~/.iflow/skills';
+    capabilitySkillNoteEl.textContent = '未发现 Skill，目录：~/.qwen/skills';
     capabilitySkillListEl.innerHTML = '<div class="capability-empty">暂无 Skill 条目。</div>';
     return;
   }
 
-  capabilitySkillNoteEl.textContent = '以下开关仅影响建议列表显示，对所有 iflow Agent 生效。';
+  capabilitySkillNoteEl.textContent = '以下开关仅影响建议列表显示，对所有 qwen Agent 生效。';
 
   const searchQuery = state.capabilitySearchQuery.trim().toLowerCase();
   const filteredSkills = searchQuery
@@ -504,7 +515,7 @@ function renderCapabilityCenterSkillPanel() {
               />
               <span>建议显示</span>
             </label>
-            <span class="capability-item-source">iflow</span>
+            <span class="capability-item-source">qwen</span>
           </div>
         </div>
       `;
@@ -872,9 +883,13 @@ export function refreshComposerState() {
   }
 
   if (isBusy) {
-    setComposerState('busy', '正在回复中，可点击停止按钮中断');
+    const currentAgentActivity = currentAgent ? state.activityByAgent[currentAgent.id] : undefined;
+    setComposerState('busy', buildBusyActivityHint(currentAgentActivity, Date.now(), AGENT_ACTIVITY_IDLE_THRESHOLD_MS));
     newSessionBtnEl.disabled = true;
     clearChatBtnEl.disabled = true;
+    if (!toolCallsPanelEl.classList.contains('hidden') && currentAgent?.id) {
+      showToolCalls(state.toolCallsByAgent[currentAgent.id] || [], { forceOpen: true });
+    }
     return;
   }
 
@@ -888,11 +903,39 @@ export function refreshComposerState() {
   setComposerState('ready', '当前会话已完成，可继续输入（输入 / 可查看命令）');
   newSessionBtnEl.disabled = false;
   clearChatBtnEl.disabled = false;
+  if (!toolCallsPanelEl.classList.contains('hidden') && currentAgent?.id) {
+    showToolCalls(state.toolCallsByAgent[currentAgent.id] || [], { forceOpen: true });
+  }
 
   // Update context usage bar
   void import('./contextUsage').then(({ updateContextUsageDisplay }) => {
     updateContextUsageDisplay();
   });
+}
+
+function resolveStreamActivityLabel(messageType: StreamMessageType | undefined): string {
+  if (messageType === 'thought') {
+    return '思考中';
+  }
+  if (messageType === 'plan') {
+    return '规划步骤';
+  }
+  if (messageType === 'system') {
+    return '任务推进';
+  }
+  return '生成内容';
+}
+
+function recordCurrentAgentActivity(agentId: string, label: string, toolName?: string): void {
+  state.activityByAgent[agentId] = recordAgentActivity(state.activityByAgent[agentId], {
+    timestamp: Date.now(),
+    label,
+    toolName,
+  });
+
+  if (agentId === state.currentAgentId) {
+    refreshComposerState();
+  }
 }
 
 // 设置 Tauri 事件监听
@@ -920,6 +963,7 @@ export function setupTauriEventListeners() {
       return;
     }
 
+    recordCurrentAgentActivity(payload.agentId, resolveStreamActivityLabel(payload.type));
     appendStreamMessage(payload.agentId, targetSessionId, payload.content, payload.type);
   });
 
@@ -932,6 +976,11 @@ export function setupTauriEventListeners() {
           scheduleMessageTimeoutWatchdog(payload.agentId, inflightSessionId);
         }
       }
+      recordCurrentAgentActivity(
+        payload.agentId,
+        '调用工具',
+        payload.toolCalls[payload.toolCalls.length - 1]?.name
+      );
       mergeToolCalls(payload.agentId, payload.toolCalls);
     }
   });
@@ -962,6 +1011,36 @@ export function setupTauriEventListeners() {
     applyAcpSessionBinding(payload.agentId, payload.sessionId);
   });
 
+  onContextUsage((payload) => {
+    if (!payload.agentId) {
+      return;
+    }
+
+    const inflightLocalSessionId = state.inflightSessionByAgent[payload.agentId];
+    const resolvedLocalSessionId =
+      inflightLocalSessionId ||
+      (state.sessionsByAgent[payload.agentId] || []).find(
+        (session) => session.acpSessionId === payload.sessionId
+      )?.id;
+
+    if (!resolvedLocalSessionId) {
+      return;
+    }
+
+    state.contextUsageBySession[resolvedLocalSessionId] = {
+      usedTokens: payload.usedTokens,
+      contextWindow: payload.contextWindow,
+      percentage: payload.percentage,
+      source: 'reported',
+    };
+
+    if (resolvedLocalSessionId === state.currentSessionId) {
+      void import('./contextUsage').then(({ updateContextUsageDisplay }) => {
+        updateContextUsageDisplay();
+      });
+    }
+  });
+
   onTaskFinish((payload) => {
     if (!payload.agentId) {
       return;
@@ -971,6 +1050,7 @@ export function setupTauriEventListeners() {
     if (targetSessionId) {
       delete state.inflightSessionByAgent[payload.agentId];
     }
+    recordCurrentAgentActivity(payload.agentId, '任务收尾');
 
     if (payload.agentId === state.currentAgentId) {
       clearMessageWatchdog(state);
@@ -997,6 +1077,7 @@ export function setupTauriEventListeners() {
   onAgentError((payload) => {
     const targetSessionId = payload.agentId ? state.inflightSessionByAgent[payload.agentId] : undefined;
     if (payload.agentId) {
+      recordCurrentAgentActivity(payload.agentId, '执行异常');
       delete state.inflightSessionByAgent[payload.agentId];
     }
     if (payload.agentId && payload.agentId !== state.currentAgentId) {
@@ -1414,6 +1495,15 @@ export function setupEventListeners() {
     void refreshCurrentAgentGitChanges();
     toolbarMoreMenuEl.classList.add('hidden');
   });
+  openWorkspaceFilesBtnEl.addEventListener('click', () => {
+    if (!state.currentAgentId) {
+      showError('请先选择 Agent');
+      return;
+    }
+    showWorkspaceFilesForAgent(state.currentAgentId, true);
+    void refreshCurrentAgentWorkspaceFiles();
+    toolbarMoreMenuEl.classList.add('hidden');
+  });
   openCapabilityCenterBtnEl.addEventListener('click', () => {
     toolbarMoreMenuEl.classList.add('hidden');
     showCapabilityCenterModal();
@@ -1532,14 +1622,14 @@ export function setupEventListeners() {
     const nameInput = document.getElementById('agent-name') as HTMLInputElement;
     const pathInput = document.getElementById('iflow-path') as HTMLInputElement;
 
-    const name = nameInput.value.trim() || 'iFlow';
-    const iflowPath = pathInput.value.trim() || 'iflow';
+    const name = nameInput.value.trim() || 'Qwen';
+    const qwenPath = pathInput.value.trim() || 'qwen';
     const workspacePath = workspacePathInputEl.value.trim();
 
     hideModal();
-    await addAgent(name, iflowPath, workspacePath);
+    await addAgent(name, qwenPath, workspacePath);
 
-    nameInput.value = 'iFlow';
+    nameInput.value = 'Qwen';
     pathInput.value = '';
   });
 
@@ -1704,6 +1794,7 @@ export function setupEventListeners() {
   chatMessagesEl.addEventListener('click', onChatMessagesClick);
   toolCallsListEl.addEventListener('click', onToolCallsClick);
   gitChangesListEl.addEventListener('click', onGitChangesClick);
+  workspaceFilesListEl.addEventListener('click', onWorkspaceFilesClick);
   currentAgentModelBtnEl.addEventListener('click', (event) => {
     event.stopPropagation();
     void toggleCurrentAgentModelMenu();
@@ -1729,6 +1820,12 @@ export function setupEventListeners() {
   });
   refreshGitChangesBtnEl.addEventListener('click', () => {
     void refreshCurrentAgentGitChanges();
+  });
+  closeWorkspaceFilesPanelBtnEl.addEventListener('click', () => {
+    closeWorkspaceFilesPanelBtnEl.closest('.workspace-files-panel')?.classList.add('hidden');
+  });
+  refreshWorkspaceFilesBtnEl.addEventListener('click', () => {
+    void refreshCurrentAgentWorkspaceFiles();
   });
 
   clearAllSessionsBtnEl.addEventListener('click', () => {
@@ -2011,7 +2108,7 @@ export async function sendMessage() {
   }
   const targetSession = findSessionById(requestSessionId);
   const historyMessagesBeforeSend =
-    targetSession?.source === 'iflow-log' ? getMessagesForSession(requestSessionId) : [];
+    targetSession?.source === 'qwen-log' ? getMessagesForSession(requestSessionId) : [];
 
   resetToolCallsForAgent(requestAgentId);
 
@@ -2043,23 +2140,24 @@ export async function sendMessage() {
   renderMessages();
   scrollToBottom();
   state.inflightSessionByAgent[requestAgentId] = requestSessionId;
+  recordCurrentAgentActivity(requestAgentId, '等待响应');
   clearMessageHardTimeout();
   dismissMessageInactivityNotice(requestAgentId, requestSessionId);
   refreshComposerState();
 
   try {
-    if (targetSession && targetSession.source !== 'iflow-log' && !targetSession.acpSessionId) {
+    if (targetSession && targetSession.source !== 'qwen-log' && !targetSession.acpSessionId) {
       targetSession.acpSessionId = generateAcpSessionId();
       void saveSessions();
     }
     const outboundContent =
-      targetSession?.source === 'iflow-log' && state.historyContinuationEnabled
+      targetSession?.source === 'qwen-log' && state.historyContinuationEnabled
         ? buildHistoryContinuationPrompt(historyMessagesBeforeSend, content)
         : content;
-    // 历史会话 (iflow-log) 的 acpSessionId 来自日志文件，不是当前运行时 session
+    // 历史会话 (qwen-log) 的 acpSessionId 来自日志文件，不是当前运行时 session
     // 应该发送 null 让后端创建新 session，而不是尝试加载不存在的 session
     const outboundSessionId =
-      targetSession?.source === 'iflow-log' ? null : targetSession?.acpSessionId || null;
+      targetSession?.source === 'qwen-log' ? null : targetSession?.acpSessionId || null;
     await tauriSendMessage(requestAgentId, outboundContent, outboundSessionId);
 
     state.messages = state.messages.filter((m) => m.id !== sendingMessage.id);
@@ -2136,6 +2234,7 @@ async function sendCompressToCurrentSession() {
   scrollToBottom();
 
   state.inflightSessionByAgent[agentId] = sessionId;
+  recordCurrentAgentActivity(agentId, '等待响应');
   clearMessageHardTimeout();
   dismissMessageInactivityNotice(agentId, sessionId);
   refreshComposerState();

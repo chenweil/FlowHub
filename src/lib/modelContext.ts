@@ -8,6 +8,7 @@ const MODEL_CONTEXT_MAP: Record<string, number> = {
   'iflow-rome':             256_000,
   'deepseek-v3.2':          128_000,
   'deepseek-v3.2-exp':      128_000,
+  'coder-model':          1_000_000,
   'qwen3-coder-plus':     1_000_000,
   'kimi-k2-thinking':       256_000,
   'minimax-m2.5':           200_000,
