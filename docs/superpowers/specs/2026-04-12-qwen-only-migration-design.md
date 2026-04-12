@@ -55,17 +55,19 @@
 
 | 文件 | 改动 |
 |---|---|
-| `src-tauri/src/commands.rs` | 将 `spawn_iflow_agent` 改为基于 Qwen 的启动逻辑；不再申请端口；连接命令内部全部切到 Qwen |
-| `src-tauri/src/state.rs` | `AgentInstance` 中的 `iflow_path` 改为更中性的 `cli_path`；`port` 对 Qwen 不再作为必需字段 |
-| `src-tauri/src/models.rs` | `AgentInfo.agent_type` 固定为 `qwen`；必要时保留现有结构以减少前端改动 |
+| `src-tauri/src/commands.rs` | 将 `spawn_iflow_agent` 重命名为 `spawn_qwen_agent`，并改为基于 Qwen 的启动逻辑；不再申请端口 |
+| `src-tauri/src/commands.rs` | 将 `connect_iflow` 重命名为 `connect_qwen`，相关调用方全部同步更新 |
+| `src-tauri/src/state.rs` | `AgentInstance` 中的 `iflow_path` 重命名为 `qwen_path`；`port` 对 Qwen 不再作为必需字段 |
+| `src-tauri/src/models.rs` | `AgentInfo.agent_type` 固定为 `qwen`，相关类型名与字段命名同步去除 `iflow` |
 
 ### 2. ACP 适配层
 
 | 文件 | 改动 |
 |---|---|
-| `src-tauri/src/agents/iflow_adapter.rs` | 替换为 Qwen `stdio ACP` 适配实现，保留当前 ACP 状态机和事件分发语义 |
+| `src-tauri/src/agents/iflow_adapter.rs` | 文件重命名为 `src-tauri/src/agents/qwen_adapter.rs`，并替换为 Qwen `stdio ACP` 适配实现 |
 | `src-tauri/src/agents/session_params.rs` | 继续复用，前提是 Qwen ACP 的请求结构与当前使用方式兼容 |
 | `src-tauri/src/router.rs` | 尽量不改业务路由，只在必要时适配 Qwen 返回的 payload 差异 |
+| `src-tauri/src/agents/mod.rs` | 模块导出从 `iflow_adapter` 改为 `qwen_adapter` |
 
 ### 2.1 stdio 传输实现
 
@@ -106,10 +108,22 @@
 
 | 文件 | 改动 |
 |---|---|
-| `src-tauri/src/history.rs` | 移除 iFlow 目录推导和数据结构假设，改为基于 `~/.qwen/projects/<workspace-key>/chats/*.jsonl` 的解析 |
+| `src-tauri/src/history.rs` | 保留文件位置，但内部所有 `iflow` 历史函数与辅助函数统一重命名为 `qwen` 语义，并改为基于 `~/.qwen/projects/<workspace-key>/chats/*.jsonl` 的解析 |
 | 历史内容提取 | 按 Qwen `message.parts` 数组解析，仅提取有 `text` 的条目；忽略 `functionCall` 等无法稳定映射的结构化条目 |
 | 历史会话名 | 优先使用首条用户消息压缩为标题，不追求还原所有系统事件 |
 | Session ID 归一化 | 直接使用文件名去掉 `.jsonl` 后的 UUID，不再校验 `session-` 前缀 |
+
+### 3.0 历史命令与函数重命名
+
+| 原名称 | 新名称 |
+|---|---|
+| `normalize_iflow_session_id` | `normalize_qwen_session_id` |
+| `parse_iflow_history_summary` | `parse_qwen_history_summary` |
+| `parse_iflow_history_messages` | `parse_qwen_history_messages` |
+| `list_iflow_history_sessions` | `list_qwen_history_sessions` |
+| `load_iflow_history_messages` | `load_qwen_history_messages` |
+| `delete_iflow_history_session` | `delete_qwen_history_session` |
+| `clear_iflow_history_sessions` | `clear_qwen_history_sessions` |
 
 ### 3.1 Qwen 历史文件结构
 
@@ -147,7 +161,7 @@
 
 | 文件 | 改动 |
 |---|---|
-| `src-tauri/src/commands.rs` 中技能扫描逻辑 | 根目录从 `~/.iflow/skills` 切换为 `~/.qwen/skills` |
+| `src-tauri/src/commands.rs` 中技能扫描逻辑 | 根目录从 `~/.iflow/skills` 切换为 `~/.qwen/skills`，相关 helper 名称同步去除 `iflow` |
 | 前端 `discoverSkills` 结果 | `agentType` 改为 `qwen`，其余结构保持兼容 |
 
 ### 5. 前端表现层
@@ -156,9 +170,20 @@
 |---|---|
 | `index.html` | 弹窗标题、占位符、默认 Agent 名称、CLI 路径说明统一改为 Qwen |
 | `src/features/agents/actions.ts` | 新增 Agent 时默认 `agent.type = "qwen"`，ID 前缀、成功提示、加载提示同步切换 |
-| `src/services/tauri.ts` | 优先对外提供 Qwen 语义的包装；为降低改动量，可短期保留旧函数名作为内部兼容层 |
-| `src/types.ts` | `source`、类型注释和字面值逐步从 `iflow` 迁移到 `qwen` |
+| `src/services/tauri.ts` | 所有 Tauri 调用名同步重命名为 `qwen` 语义，不保留 `iflow` 包装层 |
+| `src/types.ts` | `source`、类型注释和字面值统一从 `iflow` 改为 `qwen` |
 | 默认 CLI 路径 | 添加 Agent 弹窗中的默认占位提示从 `iflow` 改为 `qwen` |
+
+### 5.1 前端 Tauri 调用重命名
+
+| 原名称 | 新名称 |
+|---|---|
+| `connectIflow` | `connectQwen` |
+| `clearIflowHistorySessions` | `clearQwenHistorySessions` |
+| `listIflowHistorySessions` | `listQwenHistorySessions` |
+| `loadIflowHistoryMessages` | `loadQwenHistoryMessages` |
+| `deleteIflowHistorySession` | `deleteQwenHistorySession` |
+| `listAvailableModels` | `listQwenAvailableModels` |
 
 ## ACP 数据流
 
@@ -196,8 +221,7 @@
 
 | 原则 | 说明 |
 |---|---|
-| 先改行为 | 第一阶段优先完成 Qwen 接入和历史切换 |
-| 再改内部命名 | 对外文案与关键类型值立即改为 `qwen`；内部少量 `iflow` 函数名可以先保留一层兼容，避免一次性大重命名 |
+| 一次性彻底更换 | 所有 `iflow` 命名，包括文件名、函数名、变量名、类型名、Tauri 命令名，统一改为 `qwen` |
 | 不引入双栈 | 不保留 iflow/qwen 双分支逻辑，避免未来再背负兼容包袱 |
 
 ## 风险与约束
@@ -222,9 +246,10 @@
 
 | 顺序 | 任务 |
 |---|---|
-| 1 | 后端 ACP 传输层从 WebSocket 改为 stdio |
-| 2 | 历史读取切到 `~/.qwen/projects/.../chats/*.jsonl` |
-| 3 | 技能目录切到 `~/.qwen/skills` |
-| 4 | 前端默认值与文案切到 Qwen |
-| 5 | 补齐测试并验证 |
-| 6 | 启动新的开发服务供手工测试 |
+| 1 | 文件与命令重命名：`iflow_adapter.rs -> qwen_adapter.rs`，以及所有 `iflow` 函数名、类型名、Tauri 命令名统一改为 `qwen` |
+| 2 | 后端 ACP 传输层从 WebSocket 改为 stdio |
+| 3 | 历史读取切到 `~/.qwen/projects/.../chats/*.jsonl` |
+| 4 | 技能目录切到 `~/.qwen/skills` |
+| 5 | 前端 Tauri 调用、默认值与文案切到 Qwen |
+| 6 | 补齐测试并验证 |
+| 7 | 启动新的开发服务供手工测试 |
